@@ -1,6 +1,7 @@
 import { Metadata } from 'next'
 import { Suspense } from 'react'
 import { DM_Sans, JetBrains_Mono } from 'next/font/google'
+import { Toaster } from 'sonner'
 import '@/app/globals.css'
 
 const dmSans = DM_Sans({
@@ -30,6 +31,7 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         <Suspense>{children}</Suspense>
+        <Toaster richColors closeButton />
       </body>
     </html>
   )

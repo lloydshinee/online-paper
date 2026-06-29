@@ -2,6 +2,7 @@
 
 import { useState, useActionState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
+import { toast } from 'sonner'
 import { createAssessmentAction } from '@/app/actions/assessments'
 import DashboardHeader from '@/components/dashboard-header'
 import { ArrowLeft } from 'lucide-react'
@@ -17,6 +18,12 @@ export default function CreateAssessmentPage({ params: paramsPromise }: { params
   }, [paramsPromise])
 
   const [state, action, pending] = useActionState(createAssessmentAction, null)
+
+  useEffect(() => {
+    if (state?.error) {
+      toast.error(state.error)
+    }
+  }, [state?.error])
 
   useEffect(() => {
     if (state?.redirectTo) {
@@ -76,8 +83,6 @@ export default function CreateAssessmentPage({ params: paramsPromise }: { params
                 placeholder="60" />
             </div>
           )}
-
-          {state?.error && <p className="text-sm text-destructive">{state.error}</p>}
 
           <button type="submit" disabled={pending}
             className="flex h-10 w-full items-center justify-center rounded-md bg-primary text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50">

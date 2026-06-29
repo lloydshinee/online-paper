@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, use, useRef } from 'react'
+import { toast } from 'sonner'
 import {
   createLiveSessionAction,
   startLiveSessionAction,
@@ -150,7 +151,7 @@ export default function InstructorLivePage({
     if (!session) return
     const result = await advanceLiveSessionAction(session.id, direction)
     if (result.error) {
-      setError(result.error)
+      toast.error(result.error)
     } else if (result.session) {
       const newIndex = result.session.current_question_index
       setSession((prev) =>
@@ -172,7 +173,7 @@ export default function InstructorLivePage({
     if (!session) return
     const result = await endLiveSessionAction(session.id, assessmentId)
     if (result.error) {
-      setError(result.error)
+      toast.error(result.error)
     } else {
       broadcast('end')
       setSession((prev) => (prev ? { ...prev, status: 'ended' } : prev))

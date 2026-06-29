@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { toast } from 'sonner'
 import {
   publishAssessmentAction,
   unpublishAssessmentAction,
@@ -33,66 +34,73 @@ export default function SettingsTab({ assessmentId, classId, assessment, onAsses
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [showCloseDialog, setShowCloseDialog] = useState(false)
   const [showReleaseWarning, setShowReleaseWarning] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState<string | null>(null)
 
   const isDraft = assessment.state === 'draft'
   const isActive = assessment.state === 'active'
 
   async function handlePublish() {
     const result = await publishAssessmentAction(assessmentId, classId)
-    if (result.error) setError(result.error)
-    else onAssessmentUpdate({ ...assessment, state: 'active' })
+    if (result.error) toast.error(result.error)
+    else {
+      onAssessmentUpdate({ ...assessment, state: 'active' })
+      toast.success('Assessment published')
+    }
   }
 
   async function handleUnpublish() {
     const result = await unpublishAssessmentAction(assessmentId, classId)
-    if (result.error) setError(result.error)
-    else onAssessmentUpdate({ ...assessment, state: 'draft' })
+    if (result.error) toast.error(result.error)
+    else {
+      onAssessmentUpdate({ ...assessment, state: 'draft' })
+      toast.success('Assessment unpublished')
+    }
   }
 
   async function handleDelete() {
     const result = await deleteAssessmentAction(assessmentId, classId)
-    if (result.error) setError(result.error)
-    else onDelete()
+    if (result.error) toast.error(result.error)
+    else {
+      onDelete()
+      toast.success('Assessment deleted')
+    }
   }
 
   async function handleClose() {
     const result = await closeAssessmentAction(assessmentId, classId)
-    if (result.error) setError(result.error)
-    else onAssessmentUpdate({ ...assessment, state: 'closed' })
+    if (result.error) toast.error(result.error)
+    else {
+      onAssessmentUpdate({ ...assessment, state: 'closed' })
+      toast.success('Assessment closed')
+    }
   }
 
   async function saveSetting(updates: Record<string, unknown>) {
-    setError(null); setSuccess(null)
     const result = await updateAssessmentSettingsAction(assessmentId, updates as Parameters<typeof updateAssessmentSettingsAction>[1])
-    if (result.error) setError(result.error)
+    if (result.error) toast.error(result.error)
     else if (result.assessment) {
       onAssessmentUpdate(result.assessment)
       setScoresReleased(result.assessment.scores_released)
       setAnswerRevealed(result.assessment.answer_reveal_enabled)
       setAcceptingSubmissions(result.assessment.accepting_submissions)
       setRetakesAllowed(result.assessment.retakes_allowed)
-      setSuccess('Settings updated')
+      toast.success('Settings updated')
     }
   }
 
   async function handleSaveTitle() {
-    setError(null); setSuccess(null)
     if (titleInput.trim() === assessment.title) { setEditingTitle(false); return }
     const result = await updateAssessmentSettingsAction(assessmentId, { title: titleInput.trim() })
-    if (result.error) setError(result.error)
+    if (result.error) toast.error(result.error)
     else if (result.assessment) {
       onAssessmentUpdate(result.assessment)
       setTitleInput(result.assessment.title)
       setEditingTitle(false)
+      toast.success('Title updated')
     }
   }
 
   return (
     <div>
-      {error && <div className="mb-4 rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive">{error}</div>}
-      {success && <div className="mb-4 rounded-md bg-green-100 dark:bg-green-900/20 px-4 py-3 text-sm text-green-700 dark:text-green-400">{success}</div>}
 
       <div className="rounded-xl border border-border">
         <div className="border-b border-border px-6 py-3">

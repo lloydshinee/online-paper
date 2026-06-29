@@ -17,18 +17,22 @@ import {
 import { deactivateUserAction } from '@/app/actions/admin'
 import { ResetPasswordDialog } from './reset-password-dialog'
 import type { UserProfile } from '@/lib/auth/auth-service'
-import { useRouter } from 'next/navigation'
 import { useState } from 'react'
+import { toast } from 'sonner'
 
-export function UserTable({ users }: { users: UserProfile[] }) {
-  const router = useRouter()
+export function UserTable({ users, onUserDeactivated }: { users: UserProfile[]; onUserDeactivated: (userId: string) => void }) {
   const [deactivating, setDeactivating] = useState<string | null>(null)
 
   async function handleDeactivate(userId: string) {
     setDeactivating(userId)
-    await deactivateUserAction(userId)
+    const result = await deactivateUserAction(userId)
     setDeactivating(null)
-    router.refresh()
+    if (result?.error) {
+      toast.error(result.error)
+    } else {
+      onUserDeactivated(userId)
+      toast.success('User deactivated')
+    }
   }
 
   if (users.length === 0) {
@@ -65,7 +69,6 @@ export function UserTable({ users }: { users: UserProfile[] }) {
                   userId={u.id}
                   email={u.email}
                   name={u.name ?? ''}
-                  onReset={() => router.refresh()}
                 />
                 <AlertDialog>
                   <AlertDialogTrigger render={

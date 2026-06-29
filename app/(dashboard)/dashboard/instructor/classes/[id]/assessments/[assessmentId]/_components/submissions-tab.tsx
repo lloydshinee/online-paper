@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
+import { toast } from 'sonner'
 import { getAssessmentSubmissions, getSubmissionDetail } from '@/app/actions/grading'
 import { Search, Eye, Check, ClipboardList, AlertCircle } from 'lucide-react'
 import { Input } from '@/components/ui/input'
@@ -32,8 +33,6 @@ export default function SubmissionsTab({ assessmentId }: SubmissionsTabProps) {
   const [viewingStudent, setViewingStudent] = useState<StudentGroup | null>(null)
   const [scoresCopied, setScoresCopied] = useState(false)
   const [currentAttemptNumber, setCurrentAttemptNumber] = useState<number | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState<string | null>(null)
 
   async function loadSubmissions() {
     const { submissions: subs, total } = await getAssessmentSubmissions(assessmentId, 1000, 0, submissionSearch || undefined)
@@ -108,15 +107,13 @@ export default function SubmissionsTab({ assessmentId }: SubmissionsTabProps) {
   if (viewingSubmission) {
     return (
       <div>
-        {error && <div className="mb-4 rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive">{error}</div>}
-        {success && <div className="mb-4 rounded-md bg-green-100 dark:bg-green-900/20 px-4 py-3 text-sm text-green-700 dark:text-green-400">{success}</div>}
         <GradingPanel
           submission={viewingSubmission}
           attemptNumber={currentAttemptNumber ?? undefined}
           onBack={() => { setViewingSubmission(null); setCurrentAttemptNumber(null) }}
           onGradeComplete={handleGradeComplete}
-          onError={(msg) => setError(msg)}
-          onSuccess={(msg) => setSuccess(msg)}
+          onError={(msg) => toast.error(msg)}
+          onSuccess={(msg) => toast.success(msg)}
         />
       </div>
     )
@@ -124,8 +121,6 @@ export default function SubmissionsTab({ assessmentId }: SubmissionsTabProps) {
 
   return (
     <div>
-      {error && <div className="mb-4 rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive">{error}</div>}
-      {success && <div className="mb-4 rounded-md bg-green-100 dark:bg-green-900/20 px-4 py-3 text-sm text-green-700 dark:text-green-400">{success}</div>}
 
       <div className="rounded-xl border border-border">
         <div className="border-b border-border px-6 py-4 flex items-center justify-between flex-wrap gap-2">

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { toast } from 'sonner'
 import {
   getAssessmentWithQuestions,
   saveAssessmentQuestionsAction,
@@ -27,8 +28,6 @@ export default function QuestionsTab({ assessmentId, isDraft }: QuestionsTabProp
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [editingIdx, setEditingIdx] = useState<number | null>(null)
   const [copied, setCopied] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState<string | null>(null)
 
   const [addPoints, setAddPoints] = useState(1)
 
@@ -170,11 +169,11 @@ export default function QuestionsTab({ assessmentId, isDraft }: QuestionsTabProp
   }
 
   async function handleSave(overrideQuestions?: QuestionItem[]) {
-    setSaving(true); setError(null); setSuccess(null)
+    setSaving(true)
     const qs = overrideQuestions ?? questions
     const result = await saveAssessmentQuestionsAction(assessmentId, qs)
-    if (result.error) setError(result.error)
-    else setSuccess(`Saved ${result.count} question${result.count !== 1 ? 's' : ''}`)
+    if (result.error) toast.error(result.error)
+    else toast.success(`Saved ${result.count} question${result.count !== 1 ? 's' : ''}`)
     setSaving(false)
   }
 
@@ -187,8 +186,6 @@ export default function QuestionsTab({ assessmentId, isDraft }: QuestionsTabProp
 
   return (
     <div>
-      {error && <div className="mb-4 rounded-md bg-destructive/10 px-4 py-3 text-sm text-destructive">{error}</div>}
-      {success && <div className="mb-4 rounded-md bg-green-100 dark:bg-green-900/20 px-4 py-3 text-sm text-green-700 dark:text-green-400">{success}</div>}
 
       <div className="mb-4">
         <button

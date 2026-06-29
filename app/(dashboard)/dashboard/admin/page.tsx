@@ -9,6 +9,7 @@ import { DataTablePagination } from '@/components/data-table-pagination'
 import { Input } from '@/components/ui/input'
 import { Users, BarChart3, Search } from 'lucide-react'
 import type { UserProfile } from '@/lib/auth/auth-service'
+import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 
 interface OverviewClass {
@@ -30,6 +31,7 @@ interface OverviewClass {
 const PAGE_SIZE = 20
 
 export default function AdminDashboard() {
+  const router = useRouter()
   const [tab, setTab] = useState<'users' | 'overview'>('users')
   const [users, setUsers] = useState<UserProfile[]>([])
   const [userTotal, setUserTotal] = useState(0)
@@ -89,6 +91,11 @@ export default function AdminDashboard() {
     loadUsers(page, userSearch)
   }
 
+  function handleUserDeactivated(userId: string) {
+    setUsers((prev) => prev.filter((u) => u.id !== userId))
+    setUserTotal((prev) => prev - 1)
+  }
+
   function handleOverviewSearch() {
     setLoadingOverview(true)
     getSystemOverview(overviewSearch || undefined).then((r) => {
@@ -107,7 +114,7 @@ export default function AdminDashboard() {
             <h1 className="text-2xl font-semibold tracking-tight">Admin</h1>
             <p className="text-sm text-muted-foreground">Manage users and oversee the platform</p>
           </div>
-          {tab === 'users' && <CreateUserDialog />}
+          {tab === 'users' && <CreateUserDialog onCreated={() => router.refresh()} />}
         </div>
 
         <div className="flex border-b border-border mb-8">
@@ -156,7 +163,7 @@ export default function AdminDashboard() {
               </div>
             </div>
             <div className="px-6 py-4">
-              <UserTable users={users} />
+              <UserTable users={users} onUserDeactivated={handleUserDeactivated} />
               <DataTablePagination page={userPage} pageSize={PAGE_SIZE} total={userTotal} onPageChange={handleUserPage} />
             </div>
           </div>

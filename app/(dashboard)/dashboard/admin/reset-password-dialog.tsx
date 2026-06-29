@@ -1,8 +1,10 @@
 'use client'
 
-import { useActionState } from 'react'
+import { useState } from 'react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import { ResetPasswordForm } from './reset-password-form'
 
 interface ResetPasswordDialogProps {
   userId: string
@@ -11,17 +13,11 @@ interface ResetPasswordDialogProps {
   onReset?: () => void
 }
 
-import { resetPasswordAction } from '@/app/actions/admin'
-
 export function ResetPasswordDialog({ userId, email, name, onReset }: ResetPasswordDialogProps) {
-  const [state, action, pending] = useActionState(resetPasswordAction, null)
-
-  if (state?.success) {
-    setTimeout(() => onReset?.(), 100)
-  }
+  const [open, setOpen] = useState(false)
 
   return (
-    <Dialog>
+    <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger render={<Button variant="ghost" size="sm" />}>
         Reset
       </DialogTrigger>
@@ -32,32 +28,17 @@ export function ResetPasswordDialog({ userId, email, name, onReset }: ResetPassw
             Set a new password for {email}
           </DialogDescription>
         </DialogHeader>
-        <form action={action} className="flex flex-col gap-4">
-          <input type="hidden" name="userId" value={userId} />
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="newPassword" className="text-sm font-medium">
-              New password
-            </label>
-            <input
-              id="newPassword"
-              name="newPassword"
-              type="password"
-              required
-              minLength={6}
-              className="flex h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
-              placeholder="Min 6 characters"
-            />
-          </div>
-          {state?.error && (
-            <p className="text-sm text-destructive">{state.error}</p>
-          )}
-          {state?.success && (
-            <p className="text-sm text-green-600">{state.success}</p>
-          )}
-          <Button type="submit" disabled={pending} className="w-full">
-            {pending ? 'Resetting...' : 'Reset password'}
-          </Button>
-        </form>
+        {open && (
+          <ResetPasswordForm
+            userId={userId}
+            onReset={() => {
+              onReset?.()
+              setOpen(false)
+              toast.success('Password reset successfully')
+            }}
+            onError={(msg) => toast.error(msg)}
+          />
+        )}
       </DialogContent>
     </Dialog>
   )
