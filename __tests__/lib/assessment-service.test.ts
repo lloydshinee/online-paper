@@ -216,18 +216,17 @@ describe('assessment service', () => {
     expect(dbAssessment).toBeNull()
   })
 
-  test('cannot delete a published assessment', async () => {
-    const email = `test-nodelete-${Date.now()}@example.com`
+  test('can delete a published assessment', async () => {
+    const email = `test-delpub-${Date.now()}@example.com`
     testEmails.push(email)
 
     const { user: instructor } = await createUser(email, 'TestPass123!', 'Instructor', 'instructor')
-    const { class: cls } = await createClass(instructor!.id, 'NoDelete Class')
-    testClassIds.push(cls!.id)
+    const { class: cls } = await createClass(instructor!.id, 'Delete Pub Class')
 
     const { assessment } = await createAssessment(
       instructor!.id,
       cls!.id,
-      'NoDelete Test',
+      'DeletePub Test',
       'timed',
       30,
     )
@@ -236,8 +235,7 @@ describe('assessment service', () => {
 
     const result = await deleteAssessment(assessment!.id, instructor!.id)
 
-    expect(result.error).toBeDefined()
-    expect(result.error).toContain('draft')
+    expect(result.error).toBeNull()
   })
 
   test('getClassAssessments returns assessments for a class', async () => {

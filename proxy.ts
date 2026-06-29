@@ -1,6 +1,12 @@
 import { NextResponse, NextRequest } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 
+const roleRoutes: Record<string, string> = {
+  admin: '/dashboard/admin',
+  instructor: '/dashboard/instructor',
+  student: '/dashboard/student',
+}
+
 export async function proxy(request: NextRequest) {
   const response = NextResponse.next({
     request: {
@@ -39,6 +45,22 @@ export async function proxy(request: NextRequest) {
 
   if (user && isAuth) {
     return NextResponse.redirect(new URL('/dashboard', request.nextUrl))
+  }
+
+  if (user && isDashboard) {
+    const { data: profile } = await supabase
+      .from('users')
+      .select('role')
+      .eq('id', user.id)
+      .single()
+
+    const role = profile?.role
+    if (role) {
+      const allowedPrefix = roleRoutes[role]
+      if (allowedPrefix && !path.startsWith(allowedPrefix)) {
+        return NextResponse.redirect(new URL(allowedPrefix, request.nextUrl))
+      }
+    }
   }
 
   return response

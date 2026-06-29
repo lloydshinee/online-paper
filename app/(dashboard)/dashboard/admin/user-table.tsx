@@ -64,7 +64,7 @@ export function UserTable({ users }: { users: UserProfile[] }) {
                 <ResetPasswordDialog
                   userId={u.id}
                   email={u.email}
-                  name={u.name}
+                  name={u.name ?? ''}
                   onReset={() => router.refresh()}
                 />
                 <AlertDialog>

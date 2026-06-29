@@ -10,7 +10,7 @@ export async function createUser(
   email: string,
   password: string,
   name: string,
-  role: 'admin' | 'instructor',
+  role: 'admin' | 'instructor' | 'student',
 ): Promise<AdminResult> {
   const supabase = createServiceClient()
 
@@ -79,17 +79,39 @@ export async function resetPassword(
   }
 }
 
-export async function listUsers(): Promise<{
+export async function listUsers(
+  limit = 50,
+  offset = 0,
+  search?: string,
+): Promise<{
   users: UserProfile[]
+  total: number
   error: string | null
 }> {
   const supabase = createServiceClient()
 
-  const { data, error } = await supabase.from('users').select('id, email, name, role')
-
-  if (error) {
-    return { users: [], error: error.message }
+  let query = supabase.from('users').select('*', { count: 'exact', head: true })
+  if (search) {
+    query = query.or(`name.ilike.%${search}%,email.ilike.%${search}%`)
   }
 
-  return { users: data as UserProfile[], error: null }
+  const { count } = await query
+
+  let dataQuery = supabase
+    .from('users')
+    .select('id, email, name, role, created_at')
+    .order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1)
+
+  if (search) {
+    dataQuery = dataQuery.or(`name.ilike.%${search}%,email.ilike.%${search}%`)
+  }
+
+  const { data, error } = await dataQuery
+
+  if (error) {
+    return { users: [], total: 0, error: error.message }
+  }
+
+  return { users: (data as UserProfile[]) ?? [], total: count ?? 0, error: null }
 }

@@ -2,8 +2,10 @@
 
 import { useState, useEffect, useCallback, use, useRef, type ReactNode } from 'react'
 import { flushSync } from 'react-dom'
-import { startAssessmentAction, saveAnswerAction, submitAssessmentAction, getAssessmentData, getSubmissionResultsAction, getActiveSubmissionAction, recordViolationAction } from '@/app/actions/timed-assessment'
-import { Clock, Lightbulb, ChevronLeft, ChevronRight, CheckCircle, XCircle, Clock3, AlertCircle, AlertTriangle } from 'lucide-react'
+import { useSearchParams, useRouter } from 'next/navigation'
+import { startAssessmentAction, saveAnswerAction, submitAssessmentAction, getAssessmentData, getSubmissionResultsAction, getSubmissionHistoryAction, getActiveSubmissionAction, recordViolationAction } from '@/app/actions/timed-assessment'
+import { Clock, Lightbulb, ChevronLeft, ChevronRight, CheckCircle, XCircle, Clock3, AlertCircle, AlertTriangle, RotateCcw } from 'lucide-react'
+import DashboardHeader from '@/components/dashboard-header'
 import Link from 'next/link'
 
 interface QuestionData {
@@ -42,6 +44,7 @@ interface ResultAnswer {
 }
 
 interface SubmissionResult {
+  resultStatus: 'released' | 'hidden' | 'no-submission'
   assessment: {
     title: string
     scores_released: boolean
@@ -57,12 +60,24 @@ interface SubmissionResult {
   answers: ResultAnswer[] | null
 }
 
+interface SubmissionHistoryItem {
+  id: string
+  attempt_number: number
+  score_total: number | null
+  status: string
+  submitted_at: string | null
+  started_at: string
+}
+
 export default function TakeAssessmentPage({
   params: paramsPromise,
 }: {
   params: Promise<{ id: string; assessmentId: string }>
 }) {
   const { id: classId, assessmentId } = use(paramsPromise)
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  const isRetake = searchParams.get('retake') === '1'
 
   const [loading, setLoading] = useState(true)
   const [assessment, setAssessment] = useState<AssessmentInfo | null>(null)
@@ -75,10 +90,12 @@ export default function TakeAssessmentPage({
   const [error, setError] = useState<string | null>(null)
   const [showConfirm, setShowConfirm] = useState(false)
   const [results, setResults] = useState<SubmissionResult | null>(null)
+  const [submissionHistory, setSubmissionHistory] = useState<SubmissionHistoryItem[]>([])
   const [viewMode, setViewMode] = useState<'loading' | 'take' | 'results'>('loading')
   const [violations, setViolations] = useState(0)
   const violationsRef = useRef(0)
   const submissionIdRef = useRef<string | null>(null)
+  const initRef = useRef(false)
 
   const handleAutoSubmit = useCallback(async () => {
     if (!submissionId || submitted) return
@@ -92,27 +109,32 @@ export default function TakeAssessmentPage({
   }, [submissionId, submitted, assessmentId])
 
   useEffect(() => {
+    if (initRef.current) return
+    initRef.current = true
     async function init() {
       try {
         // First check if the student has a prior submitted/expired submission
-        const result = await getSubmissionResultsAction(assessmentId)
+        // Skip if this is a retake attempt
+        if (!isRetake) {
+          const result = await getSubmissionResultsAction(assessmentId)
 
-        if (result && result.submission) {
-          setAssessment({
-            id: assessmentId,
-            class_id: classId,
-            title: result.assessment.title,
-            mode: 'timed',
-            state: 'active',
-            duration_minutes: null,
-            scores_released: result.assessment.scores_released,
-            answer_reveal_enabled: result.assessment.answer_reveal_enabled,
-          })
-          setResults(result)
-          setSubmitted(true)
-          setViewMode('results')
-          setLoading(false)
-          return
+          if (result && result.submission) {
+            setAssessment({
+              id: assessmentId,
+              class_id: classId,
+              title: result.assessment.title,
+              mode: 'timed',
+              state: 'active',
+              duration_minutes: null,
+              scores_released: result.assessment.scores_released,
+              answer_reveal_enabled: result.assessment.answer_reveal_enabled,
+            })
+            setResults(result)
+            setSubmitted(true)
+            setViewMode('results')
+            setLoading(false)
+            return
+          }
         }
 
         // Check if the student has an in-progress submission
@@ -167,6 +189,11 @@ export default function TakeAssessmentPage({
           return
         }
 
+        if (data.assessment.mode === 'live') {
+          router.replace(`${window.location.pathname}/live`)
+          return
+        }
+
         setAssessment(data.assessment)
         setQuestions(data.questions)
 
@@ -174,7 +201,7 @@ export default function TakeAssessmentPage({
           setTimeLeft(data.timeLimit * 60)
         }
 
-        const startResult = await startAssessmentAction(assessmentId)
+        const startResult = await startAssessmentAction(assessmentId, isRetake)
         if (startResult.submissionId) {
           setSubmissionId(startResult.submissionId)
           setViewMode('take')
@@ -201,7 +228,6 @@ export default function TakeAssessmentPage({
       setTimeLeft((prev) => {
         if (prev === null || prev <= 1) {
           clearInterval(timer)
-          handleAutoSubmit()
           return 0
         }
         return prev - 1
@@ -209,6 +235,13 @@ export default function TakeAssessmentPage({
     }, 1000)
 
     return () => clearInterval(timer)
+  }, [timeLeft, submitted, handleAutoSubmit])
+
+  // Auto-submit when timer expires (must be separate from the setState updater)
+  useEffect(() => {
+    if (timeLeft === 0 && !submitted) {
+      handleAutoSubmit()
+    }
   }, [timeLeft, submitted, handleAutoSubmit])
 
   useEffect(() => {
@@ -241,6 +274,12 @@ export default function TakeAssessmentPage({
     document.addEventListener('visibilitychange', handleVisibilityChange)
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
   }, [viewMode, submitted, assessment, handleAutoSubmit])
+
+  useEffect(() => {
+    if (viewMode === 'results') {
+      getSubmissionHistoryAction(assessmentId).then(setSubmissionHistory)
+    }
+  }, [viewMode, assessmentId])
 
   const saveCurrentAnswer = useCallback(async (newAnswer: Record<string, unknown>) => {
     if (!submissionId || submitted) return
@@ -344,22 +383,12 @@ export default function TakeAssessmentPage({
   }
 
   if (viewMode === 'results' && results) {
-    const scoresReleased = results.assessment.scores_released
     const answersShown = results.assessment.answer_reveal_enabled
     const answers = results.answers ?? []
 
     return (
       <div className="min-h-screen bg-background text-foreground">
-        <header className="border-b border-border">
-          <div className="mx-auto max-w-4xl flex items-center justify-between px-6 py-4">
-            <Link href="/dashboard" className="flex items-center gap-2 font-medium text-base">
-              <div className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                <Lightbulb size={16} />
-              </div>
-              Online Paper
-            </Link>
-          </div>
-      </header>
+        <DashboardHeader userName="" />
 
       {violations > 0 && assessment && (
         <div className="mx-auto max-w-4xl px-6 pt-4">
@@ -389,7 +418,7 @@ export default function TakeAssessmentPage({
             Submitted {results.submission?.submitted_at ? new Date(results.submission.submitted_at).toLocaleString() : ''}
           </p>
 
-          {!scoresReleased ? (
+          {results.resultStatus === 'hidden' ? (
             <div className="rounded-xl border border-border p-12 text-center">
               <div className="mb-4 flex size-12 items-center justify-center rounded-full bg-muted mx-auto">
                 <Clock3 size={24} className="text-muted-foreground" />
@@ -420,6 +449,52 @@ export default function TakeAssessmentPage({
                   </div>
                 </div>
               </div>
+
+              {submissionHistory.length > 1 && (
+                <div className="rounded-xl border border-border mb-8">
+                  <div className="border-b border-border px-6 py-4">
+                    <p className="text-sm font-medium">Submission History</p>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border bg-muted/30">
+                          <th className="text-left px-6 py-3 text-xs font-medium text-muted-foreground">Attempt</th>
+                          <th className="text-left px-6 py-3 text-xs font-medium text-muted-foreground">Submitted</th>
+                          {results.resultStatus === 'released' && (
+                            <th className="text-right px-6 py-3 text-xs font-medium text-muted-foreground">Score</th>
+                          )}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {submissionHistory.map((h) => {
+                          const isCurrent = h.id === results.submission?.id
+                          return (
+                            <tr key={h.id} className={`hover:bg-muted/30 transition-colors ${isCurrent ? 'bg-primary/5' : ''}`}>
+                              <td className="px-6 py-3 text-xs">
+                                <span className={`inline-flex items-center gap-1.5 ${isCurrent ? 'font-medium' : 'text-muted-foreground'}`}>
+                                  {isCurrent && <RotateCcw size={12} className="text-primary" />}
+                                  {h.status === 'expired' ? <Clock3 size={12} className="text-muted-foreground" /> : null}
+                                  Attempt {h.attempt_number}
+                                  {isCurrent && <span className="text-primary text-[10px]">(current)</span>}
+                                </span>
+                              </td>
+                              <td className="px-6 py-3 text-xs text-muted-foreground">
+                                {h.submitted_at ? new Date(h.submitted_at).toLocaleString() : '-'}
+                              </td>
+                              {results.resultStatus === 'released' && (
+                                <td className="px-6 py-3 text-xs text-right font-mono">
+                                  {h.score_total != null ? `${h.score_total}/${results.assessment.total_points}` : '-'}
+                                </td>
+                              )}
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
 
               {answersShown && (
                 <>

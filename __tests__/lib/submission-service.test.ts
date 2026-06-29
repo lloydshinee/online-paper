@@ -8,11 +8,12 @@ import {
   getSubmission,
   saveAnswer,
   submitAssessment,
-  getQuestionsForAssessment,
   getActiveSubmission,
   getStudentSubmissionResults,
+  recalculateAssessmentScores,
+  gradeAnswer,
 } from '@/lib/submission-service'
-import { updateAssessmentSettings } from '@/lib/assessment-service'
+import { updateAssessmentSettings, getAssessmentQuestions } from '@/lib/assessment-service'
 import type { ParsedQuestion } from '@/lib/question-parser'
 
 const testEmails: string[] = []
@@ -98,7 +99,7 @@ describe('submission service', () => {
   test('student saves answers', async () => {
     const { student, assessment } = await setupAssessment()
     const { submission } = await startSubmission(student.id, assessment.id)
-    const questions = await getQuestionsForAssessment(assessment.id)
+    const questions = await getAssessmentQuestions(assessment.id)
     expect(questions).toHaveLength(3)
 
     // Save MC answer
@@ -118,14 +119,15 @@ describe('submission service', () => {
 
     // Verify answers stored
     const sub = await getSubmission(submission!.id, student.id)
-    expect(sub.answers).toHaveLength(3)
-    expect(sub.answers.find((a) => a.question_id === mcQ.id)!.answer_content).toEqual({ selectedIndex: 1 })
+    expect(sub).toBeDefined()
+    expect(sub!.answers).toHaveLength(3)
+    expect(sub!.answers.find((a) => a.question_id === mcQ.id)!.answer_content).toEqual({ selectedIndex: 1 })
   })
 
   test('student submits assessment', async () => {
     const { student, assessment } = await setupAssessment()
     const { submission } = await startSubmission(student.id, assessment.id)
-    const questions = await getQuestionsForAssessment(assessment.id)
+    const questions = await getAssessmentQuestions(assessment.id)
 
     await saveAnswer(submission!.id, questions[0].id, student.id, { selectedIndex: 0 })
     await saveAnswer(submission!.id, questions[1].id, student.id, { value: false })
@@ -176,7 +178,7 @@ describe('score release', () => {
   test('getStudentSubmissionResults returns submission after submitting', async () => {
     const { student, assessment } = await setupAssessment()
     const { submission } = await startSubmission(student.id, assessment.id)
-    const questions = await getQuestionsForAssessment(assessment.id)
+    const questions = await getAssessmentQuestions(assessment.id)
 
     await saveAnswer(submission!.id, questions[0].id, student.id, { selectedIndex: 1 })
     await saveAnswer(submission!.id, questions[1].id, student.id, { value: true })
@@ -195,7 +197,7 @@ describe('score release', () => {
   test('getStudentSubmissionResults reflects scores_released setting', async () => {
     const { instructor, student, assessment } = await setupAssessment()
     const { submission } = await startSubmission(student.id, assessment.id)
-    const questions = await getQuestionsForAssessment(assessment.id)
+    const questions = await getAssessmentQuestions(assessment.id)
 
     await saveAnswer(submission!.id, questions[0].id, student.id, { selectedIndex: 1 })
     await submitAssessment(submission!.id, student.id)
@@ -213,7 +215,7 @@ describe('score release', () => {
   test('getStudentSubmissionResults reflects answer_reveal_enabled setting', async () => {
     const { instructor, student, assessment } = await setupAssessment()
     const { submission } = await startSubmission(student.id, assessment.id)
-    const questions = await getQuestionsForAssessment(assessment.id)
+    const questions = await getAssessmentQuestions(assessment.id)
 
     await saveAnswer(submission!.id, questions[0].id, student.id, { selectedIndex: 1 })
     await submitAssessment(submission!.id, student.id)
@@ -231,9 +233,9 @@ describe('score release', () => {
   })
 
   test('getStudentSubmissionResults returns auto-graded scores', async () => {
-    const { student, assessment } = await setupAssessment()
+    const { student, assessment, instructor } = await setupAssessment()
     const { submission } = await startSubmission(student.id, assessment.id)
-    const questions = await getQuestionsForAssessment(assessment.id)
+    const questions = await getAssessmentQuestions(assessment.id)
 
     // Correct MC answer (correctIndex is 1)
     await saveAnswer(submission!.id, questions[0].id, student.id, { selectedIndex: 1 })
@@ -242,6 +244,11 @@ describe('score release', () => {
     // Essay answer (not auto-graded)
     await saveAnswer(submission!.id, questions[2].id, student.id, { text: 'Photosynthesis is the process...' })
     await submitAssessment(submission!.id, student.id)
+
+    await updateAssessmentSettings(assessment.id, instructor.id, {
+      scores_released: true,
+      answer_reveal_enabled: true,
+    })
 
     const results = await getStudentSubmissionResults(assessment.id, student.id)
 
@@ -261,5 +268,213 @@ describe('score release', () => {
     const essayAnswer = results!.answers!.find((a) => a.questions.type === 'Essay')
     expect(essayAnswer!.score).toBeNull()
     expect(essayAnswer!.is_correct).toBeNull()
+  })
+})
+
+describe('retakes', () => {
+  test('student can retake when retakes_allowed is enabled', async () => {
+    const { instructor, student, assessment } = await setupAssessment()
+    const questions = await getAssessmentQuestions(assessment.id)
+
+    // Submit first attempt
+    const { submission: first } = await startSubmission(student.id, assessment.id)
+    await saveAnswer(first!.id, questions[0].id, student.id, { selectedIndex: 1 })
+    await submitAssessment(first!.id, student.id)
+
+    // Enable retakes
+    await updateAssessmentSettings(assessment.id, instructor.id, { retakes_allowed: true })
+
+    // Start a retake
+    const { submission: retake } = await startSubmission(student.id, assessment.id, { retake: true })
+
+    expect(retake).not.toBeNull()
+    expect(retake!.id).not.toBe(first!.id) // New submission
+    expect(retake!.status).toBe('in_progress')
+
+    // Verify first submission is preserved
+    const results = await getStudentSubmissionResults(assessment.id, student.id)
+    expect(results!.submission!.id).toBe(first!.id) // Latest remains first until retake submitted
+    expect(results!.submission!.status).toBe('submitted')
+
+    // Submit retake
+    await saveAnswer(retake!.id, questions[0].id, student.id, { selectedIndex: 0 }) // Wrong answer
+    await submitAssessment(retake!.id, student.id)
+
+    // Now latest should be the retake
+    const after = await getStudentSubmissionResults(assessment.id, student.id)
+    expect(after!.submission!.id).toBe(retake!.id)
+    expect(after!.submission!.status).toBe('submitted')
+  })
+
+  test('retake fails when retakes_allowed is disabled', async () => {
+    const { student, assessment } = await setupAssessment()
+    const questions = await getAssessmentQuestions(assessment.id)
+
+    // Submit
+    const { submission: first } = await startSubmission(student.id, assessment.id)
+    await saveAnswer(first!.id, questions[0].id, student.id, { selectedIndex: 1 })
+    await submitAssessment(first!.id, student.id)
+
+    // Try retake without enabling
+    const { submission: retake, error } = await startSubmission(student.id, assessment.id, { retake: true })
+
+    expect(retake).toBeNull()
+    expect(error).toContain('Retakes are not allowed')
+  })
+
+  test('startSubmission rejects surprise re-entry after submit without retake flag', async () => {
+    const { instructor, student, assessment } = await setupAssessment()
+    const questions = await getAssessmentQuestions(assessment.id)
+
+    // Submit first attempt
+    const { submission: first } = await startSubmission(student.id, assessment.id)
+    await saveAnswer(first!.id, questions[0].id, student.id, { selectedIndex: 1 })
+    await submitAssessment(first!.id, student.id)
+
+    // Try to start a new submission without retake flag (simulating page refresh)
+    const { submission: second, error } = await startSubmission(student.id, assessment.id)
+
+    expect(second).toBeNull()
+    expect(error).toContain('already submitted')
+  })
+})
+
+describe('score recalculation', () => {
+  test('recalculates scores after question edit', async () => {
+    const { instructor, student, assessment } = await setupAssessment()
+    const questions = await getAssessmentQuestions(assessment.id)
+
+    const { submission } = await startSubmission(student.id, assessment.id)
+    // Correct answers: MC selectedIndex 1 = correctIndex 1, TF value true = correctAnswer true
+    await saveAnswer(submission!.id, questions[0].id, student.id, { selectedIndex: 1 })
+    await saveAnswer(submission!.id, questions[1].id, student.id, { value: true })
+    await saveAnswer(submission!.id, questions[2].id, student.id, { text: 'Photosynthesis...' })
+    await submitAssessment(submission!.id, student.id)
+
+    // Verify original scores
+    await updateAssessmentSettings(assessment.id, instructor.id, {
+      scores_released: true,
+      answer_reveal_enabled: true,
+    })
+    const before = await getStudentSubmissionResults(assessment.id, student.id)
+    const mcBefore = before!.answers!.find((a) => a.questions.type === 'MultipleChoice')
+    expect(mcBefore!.score).toBe(2)
+    expect(mcBefore!.is_correct).toBe(true)
+
+    // Edit questions: change MC correct answer from index 1 to index 0
+    const modifiedQuestions: ParsedQuestion[] = [
+      { ...mcQuestion, content: { ...mcQuestion.content, correctIndex: 0, correctAnswer: '3' } },
+      tfQuestion,
+      essayQuestion,
+    ]
+    await setAssessmentQuestions(assessment.id, instructor.id, modifiedQuestions)
+
+    // Check recalculation happened (score should change because correct answer changed)
+    const after = await getStudentSubmissionResults(assessment.id, student.id)
+    const mcAfter = after!.answers!.find((a) => a.questions.type === 'MultipleChoice')
+    // Student answered index 1, but correct is now index 0 — should be wrong
+    expect(mcAfter!.score).toBe(0)
+    expect(mcAfter!.is_correct).toBe(false)
+  })
+
+  test('recalculates scores when question points change', async () => {
+    const { instructor, student, assessment } = await setupAssessment()
+    const questions = await getAssessmentQuestions(assessment.id)
+
+    const { submission } = await startSubmission(student.id, assessment.id)
+    await saveAnswer(submission!.id, questions[1].id, student.id, { value: true })
+    await submitAssessment(submission!.id, student.id)
+
+    await updateAssessmentSettings(assessment.id, instructor.id, {
+      scores_released: true,
+      answer_reveal_enabled: true,
+    })
+    const before = await getStudentSubmissionResults(assessment.id, student.id)
+    expect(before!.submission!.score_total).toBe(1)
+
+    // Change TF question points from 1 to 10
+    const modifiedQuestions: ParsedQuestion[] = [
+      mcQuestion,
+      { ...tfQuestion, points: 10 },
+      essayQuestion,
+    ]
+    await setAssessmentQuestions(assessment.id, instructor.id, modifiedQuestions)
+
+    const after = await getStudentSubmissionResults(assessment.id, student.id)
+    const tfAfter = after!.answers!.find((a) => a.questions.type === 'TrueOrFalse')
+    expect(tfAfter!.score).toBe(10)
+    expect(after!.submission!.score_total).toBe(10)
+  })
+
+  test('standalone recalculateAssessmentScores works', async () => {
+    const { instructor, student, assessment } = await setupAssessment()
+    const questions = await getAssessmentQuestions(assessment.id)
+
+    const { submission } = await startSubmission(student.id, assessment.id)
+    await saveAnswer(submission!.id, questions[1].id, student.id, { value: false })
+    await submitAssessment(submission!.id, student.id)
+
+    await updateAssessmentSettings(assessment.id, instructor.id, {
+      scores_released: true,
+      answer_reveal_enabled: true,
+    })
+
+    const before = await getStudentSubmissionResults(assessment.id, student.id)
+    const tfBefore = before!.answers!.find((a) => a.questions.type === 'TrueOrFalse')
+    expect(tfBefore!.is_correct).toBe(false)
+    expect(tfBefore!.score).toBe(0)
+
+    // Directly call recalculate (no-op since questions haven't changed)
+    const result = await recalculateAssessmentScores(assessment.id)
+    expect(result.error).toBeNull()
+
+    // Scores should remain the same
+    const after = await getStudentSubmissionResults(assessment.id, student.id)
+    expect(after!.submission!.score_total).toBe(before!.submission!.score_total)
+  })
+
+  test('recalculation handles assessment with no submissions', async () => {
+    const { assessment } = await setupAssessment()
+    const result = await recalculateAssessmentScores(assessment.id)
+    expect(result.error).toBeNull()
+  })
+
+  test('recalculation preserves existing manual grades', async () => {
+    const { instructor, student, assessment } = await setupAssessment()
+    const questions = await getAssessmentQuestions(assessment.id)
+
+    const { submission } = await startSubmission(student.id, assessment.id)
+    await saveAnswer(submission!.id, questions[0].id, student.id, { selectedIndex: 1 })
+    await saveAnswer(submission!.id, questions[2].id, student.id, { text: 'Photosynthesis is the process...' })
+    await submitAssessment(submission!.id, student.id)
+
+    // Manually grade the essay
+    const sub = await getSubmission(submission!.id, student.id)
+    const essayAnswer = sub!.answers.find((a) => a.question_id === questions[2].id)
+    await gradeAnswer(essayAnswer!.id, 4, 'Well written')
+
+    // Verify manual grade
+    await updateAssessmentSettings(assessment.id, instructor.id, {
+      scores_released: true,
+      answer_reveal_enabled: true,
+    })
+    const before = await getStudentSubmissionResults(assessment.id, student.id)
+    const essayBefore = before!.answers!.find((a) => a.questions.type === 'Essay')
+    expect(essayBefore!.score).toBe(4)
+    expect(essayBefore!.feedback).toBe('Well written')
+
+    // Change MC points (triggers recalculation)
+    const modifiedQuestions: ParsedQuestion[] = [
+      { ...mcQuestion, points: 3 },
+      tfQuestion,
+      essayQuestion,
+    ]
+    await setAssessmentQuestions(assessment.id, instructor.id, modifiedQuestions)
+
+    // Manual grade should be preserved
+    const after = await getStudentSubmissionResults(assessment.id, student.id)
+    const essayAfter = after!.answers!.find((a) => a.questions.type === 'Essay')
+    expect(essayAfter!.score).toBe(4)
+    expect(essayAfter!.feedback).toBe('Well written')
   })
 })

@@ -3,12 +3,15 @@
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { authorize } from '@/lib/auth/authorize'
+import { getUser } from '@/lib/auth/auth-service'
+import { sanitize } from '@/lib/sanitize'
 import {
   createClass,
   joinClass,
   getStudentClasses,
   getClassRoster,
   archiveClass,
+  getInstructorClasses as getInstructorClassesService,
 } from '@/lib/class-service'
 
 interface ClassActionState {
@@ -23,13 +26,14 @@ export async function createClassAction(
   const auth = await authorize(['instructor'])
   if ('error' in auth) return { error: auth.error }
 
-  const name = formData.get('name') as string
+  const rawName = formData.get('name') as string
+  const name = sanitize(rawName.trim())
 
-  if (!name || !name.trim()) {
+  if (!name) {
     return { error: 'Class name is required' }
   }
 
-  const result = await createClass(auth.userId, name.trim())
+  const result = await createClass(auth.userId, name)
 
   if (result.error) {
     return { error: result.error }
@@ -66,14 +70,7 @@ export async function getInstructorClasses() {
   const auth = await authorize(['instructor'])
   if ('error' in auth) return { classes: [], error: auth.error }
 
-  const supabase = await createClient()
-  const { data, error } = await supabase
-    .from('classes')
-    .select('id, instructor_id, name, join_code, archived, created_at')
-    .eq('instructor_id', auth.userId)
-    .order('created_at', { ascending: false })
-
-  return { classes: data ?? [], error: error?.message ?? null }
+  return getInstructorClassesService(auth.userId)
 }
 
 export async function getStudentEnrolledClasses() {
@@ -94,7 +91,12 @@ export async function archiveClassAction(classId: string) {
   const auth = await authorize(['admin', 'instructor'])
   if ('error' in auth) return { error: auth.error }
 
-  const result = await archiveClass(classId)
+  const supabase = await createClient()
+  const user = await getUser(supabase)
+
+  const instructorId = user?.role === 'instructor' ? auth.userId : undefined
+
+  const result = await archiveClass(classId, instructorId)
 
   if (result.error) {
     return { error: result.error }

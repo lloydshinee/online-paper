@@ -3,6 +3,7 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { register, login, logout } from '@/lib/auth/auth-service'
+import { sanitize } from '@/lib/sanitize'
 
 interface AuthFormState {
   error?: string
@@ -13,9 +14,12 @@ export async function registerAction(
   prevState: AuthFormState | null | undefined,
   formData: FormData,
 ): Promise<AuthFormState | undefined> {
-  const name = formData.get('name') as string
+  const rawName = formData.get('name') as string
   const email = formData.get('email') as string
   const password = formData.get('password') as string
+  const confirmPassword = formData.get('confirmPassword') as string
+
+  const name = sanitize(rawName)
 
   if (!name || !email || !password) {
     return { error: 'All fields are required', email }
@@ -23,6 +27,10 @@ export async function registerAction(
 
   if (password.length < 6) {
     return { error: 'Password must be at least 6 characters', email }
+  }
+
+  if (password !== confirmPassword) {
+    return { error: 'Passwords do not match', email }
   }
 
   const supabase = await createClient()

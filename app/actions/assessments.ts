@@ -1,19 +1,21 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { createClient } from '@/lib/supabase/server'
 import { authorize } from '@/lib/auth/authorize'
+import { sanitize } from '@/lib/sanitize'
 import {
   createAssessment,
   publishAssessment,
   unpublishAssessment,
   closeAssessment,
   deleteAssessment,
-  getClassAssessments,
   setAssessmentQuestions,
-  getAssessmentQuestions,
+  getAssessmentWithQuestions as getAssessmentWithQuestionsService,
   updateAssessmentSettings,
+  getClassAssessments,
 } from '@/lib/assessment-service'
+import { getClassRoster } from '@/lib/class-service'
+import { createNotificationsForAssessment } from '@/lib/notification-service'
 import type { ParsedQuestion } from '@/lib/question-parser'
 
 interface AssessmentActionState {
@@ -29,12 +31,18 @@ export async function createAssessmentAction(
   if ('error' in auth) return { error: auth.error }
 
   const classId = formData.get('classId') as string
-  const title = formData.get('title') as string
+  const title = (formData.get('title') as string)
   const mode = formData.get('mode') as string
   const durationMinutes = formData.get('durationMinutes') as string
 
-  if (!classId || !title || !mode) {
+  const sanitizedTitle = sanitize(title.trim())
+
+  if (!classId || !sanitizedTitle || !mode) {
     return { error: 'All fields are required' }
+  }
+
+  if (sanitizedTitle.length > 200) {
+    return { error: 'Title must be 200 characters or fewer' }
   }
 
   if (mode === 'timed' && (!durationMinutes || parseInt(durationMinutes) < 1)) {
@@ -44,7 +52,7 @@ export async function createAssessmentAction(
   const result = await createAssessment(
     auth.userId,
     classId,
-    title.trim(),
+    sanitizedTitle,
     mode as 'timed' | 'live',
     mode === 'timed' ? parseInt(durationMinutes) : undefined,
   )
@@ -67,6 +75,14 @@ export async function publishAssessmentAction(assessmentId: string, classId: str
 
   if (result.error) {
     return { error: result.error }
+  }
+
+  // Send notifications to enrolled students
+  if (result.assessment) {
+    const { students } = await getClassRoster(auth.userId, result.assessment.class_id)
+    if (students.length > 0) {
+      await createNotificationsForAssessment(assessmentId, students.map((s) => s.id), result.assessment.title)
+    }
   }
 
   revalidatePath(`/dashboard/instructor/classes/${classId}`)
@@ -143,20 +159,13 @@ export async function getAssessmentWithQuestions(assessmentId: string) {
   const auth = await authorize(['instructor'])
   if ('error' in auth) return { assessment: null, questions: [], error: auth.error }
 
-  const supabase = await createClient()
-  const { data: assessment } = await supabase
-    .from('assessments')
-    .select('id, class_id, title, mode, state, duration_minutes, scores_released, answer_reveal_enabled, accepting_submissions, created_at')
-    .eq('id', assessmentId)
-    .single()
+  const result = await getAssessmentWithQuestionsService(assessmentId)
 
-  if (!assessment) {
+  if (!result.assessment) {
     return { assessment: null, questions: [], error: 'Assessment not found' }
   }
 
-  const questions = await getAssessmentQuestions(assessmentId)
-
-  return { assessment, questions, error: null }
+  return { assessment: result.assessment, questions: result.questions, error: null }
 }
 
 export async function updateAssessmentSettingsAction(
@@ -168,12 +177,21 @@ export async function updateAssessmentSettingsAction(
     scores_released?: boolean
     answer_reveal_enabled?: boolean
     accepting_submissions?: boolean
+    retakes_allowed?: boolean
   },
 ) {
   const auth = await authorize(['instructor'])
   if ('error' in auth) return { error: auth.error }
 
-  const result = await updateAssessmentSettings(assessmentId, auth.userId, updates)
+  const sanitized = { ...updates }
+  if (sanitized.title) {
+    sanitized.title = sanitize(sanitized.title.trim())
+    if (sanitized.title.length > 200) {
+      return { error: 'Title must be 200 characters or fewer' }
+    }
+  }
+
+  const result = await updateAssessmentSettings(assessmentId, auth.userId, sanitized)
 
   if (result.error) {
     return { error: result.error }

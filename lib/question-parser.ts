@@ -201,6 +201,89 @@ const parsers: Record<SectionType, (body: string) => ParsedQuestion[]> = {
   Coding: parseCoding,
 }
 
+function formatMultipleChoice(questions: ParsedQuestion[]): string {
+  return questions.map((q) => {
+    const opts = q.content.options as string[]
+    const idx = q.content.correctIndex as number
+    const letter = String.fromCharCode(97 + idx)
+    const lines = [
+      q.content.stem as string,
+      ...opts.map((o, i) => `${String.fromCharCode(97 + i)}) ${o}`),
+      `Answer: ${letter}`,
+    ]
+    if (q.points !== 1) lines.push(`Points: ${q.points}`)
+    return lines.join('\n')
+  }).join('\n\n')
+}
+
+function formatTrueOrFalse(questions: ParsedQuestion[]): string {
+  return questions.map((q) => {
+    const lines = [
+      q.content.statement as string,
+      `Answer: ${q.content.correctAnswer ? 'True' : 'False'}`,
+    ]
+    if (q.points !== 1) lines.push(`Points: ${q.points}`)
+    return lines.join('\n')
+  }).join('\n\n')
+}
+
+function formatFillInTheBlank(questions: ParsedQuestion[]): string {
+  return questions.map((q) => {
+    const lines = [
+      q.content.stem as string,
+      `Answer: ${q.content.correctAnswer as string}`,
+    ]
+    if (q.points !== 1) lines.push(`Points: ${q.points}`)
+    return lines.join('\n')
+  }).join('\n\n')
+}
+
+function formatEssay(questions: ParsedQuestion[]): string {
+  return questions.map((q) => {
+    const lines = [q.content.prompt as string]
+    if (q.points !== 1) lines.push(`Points: ${q.points}`)
+    return lines.join('\n')
+  }).join('\n\n')
+}
+
+function formatCoding(questions: ParsedQuestion[]): string {
+  return questions.map((q) => {
+    const lines = [q.content.prompt as string]
+    if (q.points !== 1) lines.push(`Points: ${q.points}`)
+    return lines.join('\n')
+  }).join('\n\n')
+}
+
+const typeOrder: SectionType[] = ['MultipleChoice', 'TrueOrFalse', 'FillInTheBlank', 'Essay', 'Coding']
+
+export function formatQuestions(questions: ParsedQuestion[]): string {
+  const grouped = new Map<SectionType, ParsedQuestion[]>()
+  for (const q of questions) {
+    const list = grouped.get(q.type) || []
+    list.push(q)
+    grouped.set(q.type, list)
+  }
+
+  const sections: string[] = []
+  for (const type of typeOrder) {
+    const list = grouped.get(type)
+    if (!list || list.length === 0) continue
+
+    let body = ''
+    switch (type) {
+      case 'MultipleChoice': body = formatMultipleChoice(list); break
+      case 'TrueOrFalse': body = formatTrueOrFalse(list); break
+      case 'FillInTheBlank': body = formatFillInTheBlank(list); break
+      case 'Essay': body = formatEssay(list); break
+      case 'Coding': body = formatCoding(list); break
+    }
+
+    sections.push(`[${type}]\n${body}`)
+  }
+
+  return sections.join('\n\n')
+}
+
 export function parseQuestions(text: string): ParsedQuestion[] {
   const sections = splitSections(text.trim())
   const allQuestions: ParsedQuestion[] = []

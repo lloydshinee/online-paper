@@ -52,16 +52,34 @@ export async function createLiveSession(
 
   const { data: existing } = await supabase
     .from('live_sessions')
-    .select('id')
+    .select('id, status')
     .eq('assessment_id', assessmentId)
-    .neq('status', 'ended')
     .maybeSingle()
 
-  if (existing) return { session: null, error: 'A live session is already in progress for this assessment' }
+  if (existing) {
+    if (existing.status !== 'ended') {
+      return { session: null, error: 'A live session is already in progress for this assessment' }
+    }
+
+    await supabase
+      .from('live_answers')
+      .delete()
+      .eq('session_id', existing.id)
+
+    const { data: reset, error: resetError } = await supabase
+      .from('live_sessions')
+      .update({ status: 'waiting', current_question_index: -1, started_at: null, ended_at: null })
+      .eq('id', existing.id)
+      .select('*')
+      .single()
+
+    if (resetError) return { session: null, error: resetError.message }
+    return { session: reset as LiveSessionData, error: null }
+  }
 
   const { data: session, error } = await supabase
     .from('live_sessions')
-    .insert({ assessment_id: assessmentId, instructor_id: instructorId, status: 'waiting', current_question_index: 0 })
+    .insert({ assessment_id: assessmentId, instructor_id: instructorId, status: 'waiting', current_question_index: -1 })
     .select('*')
     .single()
 
@@ -248,6 +266,69 @@ export async function getStudentLiveAnswer(
     .maybeSingle()
 
   return data?.answer_content as Record<string, unknown> ?? null
+}
+
+export async function saveLiveAnswer(
+  sessionId: string,
+  studentId: string,
+  questionId: string,
+  answerContent: Record<string, unknown>,
+): Promise<{ error: string | null }> {
+  const supabase = createServiceClient()
+
+  const { error } = await supabase
+    .from('live_answers')
+    .upsert({
+      session_id: sessionId,
+      student_id: studentId,
+      question_id: questionId,
+      answer_content: answerContent,
+      auto_saved_at: new Date().toISOString(),
+    }, { onConflict: 'session_id,student_id,question_id' })
+
+  return { error: error ? error.message : null }
+}
+
+export async function getQuestionAnswerCount(
+  sessionId: string,
+  questionId: string,
+): Promise<number> {
+  const supabase = createServiceClient()
+
+  const { count } = await supabase
+    .from('live_answers')
+    .select('*', { count: 'exact', head: true })
+    .eq('session_id', sessionId)
+    .eq('question_id', questionId)
+    .neq('answer_content', '{}')
+
+  return count ?? 0
+}
+
+export async function getSessionAnswerCounts(
+  sessionId: string,
+  questionIds: string[],
+): Promise<Record<string, number>> {
+  const supabase = createServiceClient()
+
+  const { data } = await supabase
+    .from('live_answers')
+    .select('question_id')
+    .eq('session_id', sessionId)
+    .in('question_id', questionIds)
+    .neq('answer_content', '{}')
+
+  const counts: Record<string, number> = {}
+  for (const qid of questionIds) {
+    counts[qid] = 0
+  }
+  if (data) {
+    for (const row of data) {
+      counts[row.question_id] = (counts[row.question_id] || 0) + 1
+    }
+  }
+
+  return counts
 }
 
 export async function hasActiveLiveSession(

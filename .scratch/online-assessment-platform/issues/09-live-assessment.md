@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -14,20 +14,20 @@ Schema: `live_sessions` table (id, assessment_id FK, instructor_id FK, current_q
 
 ## Acceptance criteria
 
-- [ ] Instructor clicks "Start Live Assessment" on a published live-mode assessment → session created, status `waiting`
-- [ ] Instructor sees session control panel: current question preview, Next/Previous buttons, student presence list (who's joined)
-- [ ] Instructor clicks "Start" → status `active`, students see the first question
-- [ ] Student sees a "Join Live" button on the class page → joins session → sees current question
-- [ ] Student answers auto-save as they type (debounced, e.g., every 2 seconds or on blur)
-- [ ] Instructor clicks "Next" → all students advance to next question; previous answers are saved
-- [ ] Instructor clicks "Previous" → all students return to previous question; their previous answer is restored
-- [ ] Late-joining student starts at the current question (not question 1)
-- [ ] Instructor disconnects and reconnects → session state restored, can resume
-- [ ] Student disconnects and reconnects → rejoins session at current question
-- [ ] Student in a live session tries to join another live session → rejected with message
-- [ ] Instructor clicks "End Session" → status `ended`, all student answers finalized as a submission
-- [ ] Live answers become a regular submission after session ends (flow into same grading pipeline as timed)
-- [ ] Tests: create session → start → advance questions → answers auto-save → end → verify submission created; late join → starts at current question; dual join → rejected; disconnect instructor → rejoin → session resumes
+- [x] Instructor clicks "Start Live Assessment" on a published live-mode assessment → session created, status `waiting`
+- [x] Instructor sees session control panel: current question preview, Next/Previous buttons, student presence list (who's joined)
+- [x] Instructor clicks "Start" → status `active`, students see the first question
+- [x] Student sees a "Join Live" button on the class page → joins session → sees current question
+- [x] Student answers auto-save as they type (debounced, e.g., every 2 seconds or on blur)
+- [x] Instructor clicks "Next" → all students advance to next question; previous answers are saved
+- [x] Instructor clicks "Previous" → all students return to previous question; their previous answer is restored
+- [x] Late-joining student starts at the current question (not question 1)
+- [x] Instructor disconnects and reconnects → session state restored, can resume
+- [x] Student disconnects and reconnects → rejoins session at current question
+- [x] Student in a live session tries to join another live session → rejected with message
+- [x] Instructor clicks "End Session" → status `ended`, all student answers finalized as a submission
+- [x] Live answers become a regular submission after session ends (flow into same grading pipeline as timed)
+- [x] Tests: create session → start → advance questions → answers auto-save → end → verify submission created; late join → starts at current question; dual join → rejected; disconnect instructor → rejoin → session resumes
 
 ## Blocked by
 

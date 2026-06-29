@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -18,18 +18,18 @@ Schema: `notifications` table (id, user_id FK, assessment_id FK nullable, messag
 
 ## Acceptance criteria
 
-- [ ] Publishing an assessment creates a notification for each enrolled student
-- [ ] Notification bell on student dashboard shows unread count badge
-- [ ] Click bell → dropdown with notification list (newest first)
-- [ ] Click notification → navigate to assessment page, mark as read
-- [ ] "Mark all as read" button
-- [ ] Instructor toggles "Allow retakes" on an assessment → previously submitted students see "Retake" button
-- [ ] Student clicks "Retake" → new submission created (old submission preserved), same timed/live flow
-- [ ] If retakes disabled → "Retake" button hidden for all students
-- [ ] Admin dashboard: "System Overview" tab shows all classes (collapsible per class → assessments → submission counts)
-- [ ] Admin can click into any class → sees full class view (same as instructor sees)
-- [ ] Admin can view any student's submission and scores
-- [ ] Tests: publish assessment → notification created for each enrolled student; enable retakes → student retakes → new submission appears; admin views all classes → can drill into any class
+- [x] Publishing an assessment creates a notification for each enrolled student
+- [x] Notification bell on student dashboard shows unread count badge
+- [x] Click bell → dropdown with notification list (newest first)
+- [x] Click notification → navigate to assessment page, mark as read
+- [x] "Mark all as read" button
+- [x] Instructor toggles "Allow retakes" on an assessment → previously submitted students see "Retake" button
+- [x] Student clicks "Retake" → new submission created (old submission preserved), same timed/live flow
+- [x] If retakes disabled → "Retake" button hidden for all students
+- [x] Admin dashboard: "System Overview" tab shows all classes (collapsible per class → assessments → submission counts)
+- [x] Admin can click into any class → sees full class view (same as instructor sees)
+- [x] Admin can view any student's submission and scores
+- [x] Tests: publish assessment → notification created for each enrolled student; enable retakes → student retakes → new submission appears; admin views all classes → can drill into any class
 
 ## Blocked by
 

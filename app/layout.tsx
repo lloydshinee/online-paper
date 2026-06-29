@@ -1,4 +1,5 @@
 import { Metadata } from 'next'
+import { Suspense } from 'react'
 import { DM_Sans, JetBrains_Mono } from 'next/font/google'
 import '@/app/globals.css'
 
@@ -27,7 +28,9 @@ export default function RootLayout({
       lang="en"
       className={`${dmSans.variable} ${jetbrainsMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        <Suspense>{children}</Suspense>
+      </body>
     </html>
   )
 }

@@ -1,8 +1,9 @@
 import { requireRole } from '@/lib/auth/require-auth'
-import { logoutAction } from '@/app/actions/auth'
+import DashboardHeader from '@/components/dashboard-header'
 import { getInstructorClasses } from '@/app/actions/classes'
 import { CreateClassDialog } from './create-class-dialog'
-import { BookOpen, Lightbulb, ExternalLink } from 'lucide-react'
+import { BookOpen, ExternalLink, Users } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import Link from 'next/link'
 
 export default async function InstructorDashboard() {
@@ -11,24 +12,7 @@ export default async function InstructorDashboard() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="border-b border-border">
-        <div className="mx-auto max-w-5xl flex items-center justify-between px-6 py-4">
-          <Link href="/dashboard" className="flex items-center gap-2 font-medium text-base">
-            <div className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-              <Lightbulb size={16} />
-            </div>
-            Online Paper
-          </Link>
-          <div className="flex items-center gap-3">
-            <span className="text-sm text-muted-foreground">{user.name}</span>
-            <form action={logoutAction}>
-              <button className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted transition-colors">
-                Sign out
-              </button>
-            </form>
-          </div>
-        </div>
-      </header>
+      <DashboardHeader userName={user.name ?? 'User'} />
 
       <main className="mx-auto max-w-5xl px-6 py-10">
         <div className="mb-8 flex items-center justify-between">
@@ -39,45 +23,56 @@ export default async function InstructorDashboard() {
           <CreateClassDialog />
         </div>
 
-        <div className="rounded-xl border border-border">
-          <div className="border-b border-border px-6 py-4">
-            <div className="flex items-center gap-2">
-              <BookOpen size={16} className="text-muted-foreground" />
-              <p className="text-sm font-medium">My Classes</p>
-            </div>
-            <p className="text-xs text-muted-foreground">{classes.length} class{classes.length !== 1 ? 'es' : ''}</p>
-          </div>
-          <div className="px-6 py-4">
-            {classes.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-4 text-center">
-                No classes yet. Create your first class to start adding assessments.
-              </p>
-            ) : (
-              <div className="divide-y divide-border -mx-6">
-                {classes.map((cls) => (
-                  <Link
-                    key={cls.id}
-                    href={`/dashboard/instructor/classes/${cls.id}`}
-                    className="flex items-center justify-between px-6 py-4 hover:bg-muted/50 transition-colors"
-                  >
-                    <div>
-                      <p className="text-sm font-medium">{cls.name}</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        Code: <span className="font-mono">{cls.join_code}</span>
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {cls.archived && (
-                        <span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">Archived</span>
-                      )}
-                      <ExternalLink size={14} className="text-muted-foreground" />
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            )}
-          </div>
+        <div className="mb-4 flex items-center gap-2">
+          <BookOpen size={15} className="text-muted-foreground" />
+          <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">My Classes</h2>
+          <Badge variant="secondary" className="ml-1">{classes.length}</Badge>
         </div>
+
+        {classes.length === 0 ? (
+          <div className="rounded-xl border border-border p-12 text-center">
+            <div className="mb-4 flex size-12 items-center justify-center rounded-full bg-muted mx-auto">
+              <BookOpen size={24} className="text-muted-foreground" />
+            </div>
+            <h3 className="text-base font-medium mb-1">No classes yet</h3>
+            <p className="text-sm text-muted-foreground max-w-md mx-auto">
+              Create your first class to start adding assessments.
+            </p>
+          </div>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {classes.map((cls) => (
+              <Link
+                key={cls.id}
+                href={`/dashboard/instructor/classes/${cls.id}`}
+                className="group rounded-xl border border-border bg-card hover:border-primary/30 hover:shadow-sm transition-all"
+              >
+                <div className="p-5">
+                  <div className="flex items-start justify-between gap-3 mb-3">
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-sm font-semibold truncate">{cls.name}</h3>
+                      <p className="text-xs text-muted-foreground font-mono mt-0.5">{cls.join_code}</p>
+                    </div>
+                    <div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                      <Users size={14} />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {cls.archived ? (
+                      <Badge variant="secondary">Archived</Badge>
+                    ) : (
+                      <Badge variant="outline">Active</Badge>
+                    )}
+                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground ml-auto">
+                      Open <ExternalLink size={12} />
+                    </span>
+                  </div>
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
       </main>
     </div>
   )

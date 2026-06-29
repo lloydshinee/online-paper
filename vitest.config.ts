@@ -8,5 +8,8 @@ export default defineConfig(({ mode }) => ({
   test: {
     environment: 'jsdom',
     env: loadEnv(mode, process.cwd(), ''),
+    globalSetup: ['./__tests__/setup.ts'],
+    testTimeout: 30000,
+    hookTimeout: 30000,
   },
 }))

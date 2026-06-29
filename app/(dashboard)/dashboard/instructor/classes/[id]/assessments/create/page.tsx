@@ -3,7 +3,8 @@
 import { useState, useActionState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createAssessmentAction } from '@/app/actions/assessments'
-import { ArrowLeft, Lightbulb } from 'lucide-react'
+import DashboardHeader from '@/components/dashboard-header'
+import { ArrowLeft } from 'lucide-react'
 import Link from 'next/link'
 
 export default function CreateAssessmentPage({ params: paramsPromise }: { params: Promise<{ id: string }> }) {
@@ -25,16 +26,7 @@ export default function CreateAssessmentPage({ params: paramsPromise }: { params
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="border-b border-border">
-        <div className="mx-auto max-w-5xl flex items-center justify-between px-6 py-4">
-          <Link href="/dashboard" className="flex items-center gap-2 font-medium text-base">
-            <div className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-              <Lightbulb size={16} />
-            </div>
-            Online Paper
-          </Link>
-        </div>
-      </header>
+      <DashboardHeader userName="" />
 
       <main className="mx-auto max-w-lg px-6 py-10">
         <Link
@@ -52,7 +44,7 @@ export default function CreateAssessmentPage({ params: paramsPromise }: { params
 
           <div className="flex flex-col gap-1.5">
             <label htmlFor="title" className="text-sm font-medium">Title</label>
-            <input id="title" name="title" type="text" required
+            <input id="title" name="title" type="text" required maxLength={200}
               className="flex h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
               placeholder="e.g. Midterm Exam" />
           </div>

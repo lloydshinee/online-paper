@@ -1,5 +1,6 @@
 import { createServiceClient } from '@/lib/supabase/service'
-import { gradeSubmission } from '@/lib/auto-grader'
+import { questionTypeRegistry } from '@/lib/question-types/registry'
+import type { SupabaseClient } from '@supabase/supabase-js'
 
 export interface SubmissionData {
   id: string
@@ -47,6 +48,7 @@ interface AnswerResult {
 export async function startSubmission(
   studentId: string,
   assessmentId: string,
+  opts?: { retake?: boolean },
 ): Promise<SubmissionResult> {
   const supabase = createServiceClient()
 
@@ -58,13 +60,31 @@ export async function startSubmission(
     .eq('status', 'in_progress')
     .maybeSingle()
 
-  if (existing) {
-    return { submission: existing as SubmissionData, error: null }
+  if (existing && !opts?.retake) {
+    const overdue = await isSubmissionOverdue(existing)
+    if (overdue) {
+      await expireSubmission(existing.id)
+    } else {
+      return { submission: existing as SubmissionData, error: null }
+    }
+  }
+
+  if (!opts?.retake) {
+    const { data: completed } = await supabase
+      .from('submissions')
+      .select('id')
+      .eq('student_id', studentId)
+      .eq('assessment_id', assessmentId)
+      .in('status', ['submitted', 'expired'])
+      .limit(1)
+    if (completed && completed.length > 0) {
+      return { submission: null, error: 'You have already submitted this assessment. Use the retake option to try again.' }
+    }
   }
 
   const { data: assessment } = await supabase
     .from('assessments')
-    .select('id, state, duration_minutes, accepting_submissions')
+    .select('id, state, mode, duration_minutes, accepting_submissions, retakes_allowed')
     .eq('id', assessmentId)
     .single()
 
@@ -72,7 +92,19 @@ export async function startSubmission(
     return { submission: null, error: 'Assessment is not available' }
   }
 
-  if (assessment.accepting_submissions === false) {
+  if (assessment.mode === 'live') {
+    return { submission: null, error: 'Live assessments are taken through the live session page' }
+  }
+
+  if (opts?.retake) {
+    if (!assessment.retakes_allowed) {
+      return { submission: null, error: 'Retakes are not allowed for this assessment' }
+    }
+    // Expire any existing in_progress submission from a previous retake
+    if (existing) {
+      await expireSubmission(existing.id)
+    }
+  } else if (assessment.accepting_submissions === false) {
     return { submission: null, error: 'Assessment is not currently accepting submissions' }
   }
 
@@ -128,12 +160,18 @@ export async function getActiveSubmission(
     .select('*')
     .eq('student_id', studentId)
     .eq('assessment_id', assessmentId)
-    .in('status', ['in_progress', 'submitted', 'expired'])
-    .order('started_at', { ascending: false })
-    .limit(1)
+    .eq('status', 'in_progress')
     .maybeSingle()
 
   if (!submission) return null
+
+  if (submission.status === 'in_progress') {
+    const overdue = await isSubmissionOverdue(submission)
+    if (overdue) {
+      await expireSubmission(submission.id)
+      return null
+    }
+  }
 
   const { data: answers } = await supabase
     .from('answers')
@@ -255,35 +293,6 @@ export async function expireSubmission(
   return { submission: updated as SubmissionData, error: null }
 }
 
-export async function getQuestionsForAssessment(
-  assessmentId: string,
-): Promise<QuestionData[]> {
-  const supabase = createServiceClient()
-
-  const { data } = await supabase
-    .from('questions')
-    .select('*')
-    .eq('assessment_id', assessmentId)
-    .order('order_index')
-
-  return (data as QuestionData[]) ?? []
-}
-
-export async function getAssessmentTimeLimit(
-  assessmentId: string,
-): Promise<number | null> {
-  const supabase = createServiceClient()
-
-  const { data } = await supabase
-    .from('assessments')
-    .select('duration_minutes, mode')
-    .eq('id', assessmentId)
-    .single()
-
-  if (!data || data.mode !== 'timed') return null
-  return data.duration_minutes
-}
-
 export async function getSubmissionForGrading(
   submissionId: string,
 ): Promise<SubmissionWithAnswers & { assessment_title: string } | null> {
@@ -297,41 +306,21 @@ export async function getSubmissionForGrading(
 
   if (!submission) return null
 
-  const { data: allQuestions } = await supabase
-    .from('questions')
-    .select('id, type, content, points, order_index')
-    .eq('assessment_id', submission.assessment_id)
-    .order('order_index')
-
-  const { data: existingAnswers } = await supabase
-    .from('answers')
-    .select('*')
-    .eq('submission_id', submissionId)
-
-  const answeredIds = new Set((existingAnswers ?? []).map((a) => a.question_id))
-  const manualTypes = ['Essay', 'Coding']
-  const unansweredManual = (allQuestions ?? []).filter(
-    (q) => !answeredIds.has(q.id) && manualTypes.includes(q.type)
-  )
-
-  if (unansweredManual.length > 0) {
-    const inserts = unansweredManual.map((q) => ({
-      submission_id: submissionId,
-      question_id: q.id,
-      answer_content: {} as Record<string, unknown>,
-      score: 0,
-      is_correct: null,
-      feedback: null,
-      updated_at: new Date().toISOString(),
-    }))
-    await supabase.from('answers').upsert(inserts, { onConflict: 'submission_id,question_id' })
-    await recalculateTotal(submissionId)
-    const { data: updated } = await supabase
-      .from('submissions')
-      .select('*')
-      .eq('id', submissionId)
-      .single()
-    if (updated) submission.score_total = updated.score_total
+  if (submission.status === 'in_progress') {
+    const overdue = await isSubmissionOverdue(submission)
+    if (overdue) {
+      await expireSubmission(submission.id)
+      const { data: refreshed } = await supabase
+        .from('submissions')
+        .select('*')
+        .eq('id', submissionId)
+        .single()
+      if (refreshed) {
+        submission.status = refreshed.status
+        submission.submitted_at = refreshed.submitted_at
+        submission.score_total = refreshed.score_total
+      }
+    }
   }
 
   const { data: allAnswers } = await supabase
@@ -339,28 +328,34 @@ export async function getSubmissionForGrading(
     .select('*, questions!inner(type, content, points, order_index)')
     .eq('submission_id', submissionId)
 
-  const answeredIds2 = new Set((allAnswers ?? []).map((a) => a.question_id))
-  const unansweredAuto = (allQuestions ?? [])
-    .filter((q) => !answeredIds2.has(q.id))
-    .map((q) => ({
-      id: '',
-      submission_id: submissionId,
-      question_id: q.id,
-      answer_content: {} as Record<string, unknown>,
-      score: null,
-      is_correct: null,
-      feedback: null,
-      questions: {
-        type: q.type,
-        content: q.content,
-        points: q.points,
-        order_index: q.order_index,
-      },
-    }))
+  // Fetch all questions to fill in unanswered ones
+  const { data: allQuestions } = await supabase
+    .from('questions')
+    .select('id, type, content, points, order_index')
+    .eq('assessment_id', submission.assessment_id)
+    .order('order_index')
 
-  const mergedAnswers = [...(allAnswers ?? []), ...unansweredAuto].sort(
-    (a, b) => ((a.questions as { order_index: number })?.order_index ?? 0) - ((b.questions as { order_index: number })?.order_index ?? 0)
-  )
+  const answeredIds = new Set((allAnswers ?? []).map((a) => a.question_id))
+  const unanswered = (allQuestions ?? []).filter((q) => !answeredIds.has(q.id))
+
+  const placeholderAnswers: (AnswerData & { questions: { type: string; content: Record<string, unknown>; points: number; order_index: number } })[] = unanswered.map((q) => ({
+    id: `_unanswered_${submissionId}_${q.id}`,
+    submission_id: submissionId,
+    question_id: q.id,
+    answer_content: {} as Record<string, unknown>,
+    score: null,
+    is_correct: null,
+    feedback: null,
+    questions: {
+      type: q.type,
+      content: q.content as Record<string, unknown>,
+      points: q.points,
+      order_index: q.order_index,
+    },
+  }))
+
+  const mergedAnswers = [...((allAnswers ?? []) as typeof placeholderAnswers), ...placeholderAnswers]
+  mergedAnswers.sort((a, b) => (a.questions?.order_index ?? 0) - (b.questions?.order_index ?? 0))
 
   const { data: assessment } = await supabase
     .from('assessments')
@@ -377,16 +372,67 @@ export async function getSubmissionForGrading(
 
 export async function getSubmissionsForAssessment(
   assessmentId: string,
-): Promise<(SubmissionData & { student_name: string; student_email: string; pending_count: number })[]> {
+  limit = 50,
+  offset = 0,
+  search?: string,
+): Promise<{
+  submissions: (SubmissionData & { student_name: string; student_email: string; pending_count: number })[]
+  total: number
+}> {
   const supabase = createServiceClient()
 
-  const { data: submissions } = await supabase
+  // If searching, first find matching student IDs
+  let studentFilter: string[] | undefined
+  if (search) {
+    const { data: matchingStudents } = await supabase
+      .from('users')
+      .select('id')
+      .or(`name.ilike.%${search}%,email.ilike.%${search}%`)
+    studentFilter = (matchingStudents ?? []).map((s) => s.id)
+    if (studentFilter.length === 0) return { submissions: [], total: 0 }
+  }
+
+  let countQuery = supabase.from('submissions').select('*', { count: 'exact', head: true }).eq('assessment_id', assessmentId)
+  if (studentFilter) {
+    countQuery = countQuery.in('student_id', studentFilter)
+  }
+  const { count } = await countQuery
+
+  let dataQuery = supabase
     .from('submissions')
     .select('*')
     .eq('assessment_id', assessmentId)
     .order('started_at', { ascending: false })
+    .range(offset, offset + limit - 1)
 
-  if (!submissions) return []
+  if (studentFilter) {
+    dataQuery = dataQuery.in('student_id', studentFilter)
+  }
+
+  const { data: submissions } = await dataQuery
+
+  if (!submissions || submissions.length === 0) return { submissions: [], total: count ?? 0 }
+
+  // Expire any overdue in_progress submissions so pending counts are accurate
+  const inProgress = submissions.filter((s) => s.status === 'in_progress')
+  if (inProgress.length > 0) {
+    const { data: assessment } = await supabase
+      .from('assessments')
+      .select('duration_minutes, mode')
+      .eq('id', assessmentId)
+      .single()
+
+    if (assessment && assessment.mode === 'timed' && assessment.duration_minutes) {
+      const now = Date.now()
+      const durationMs = assessment.duration_minutes * 60 * 1000
+      for (const s of inProgress) {
+        const deadline = new Date(s.started_at).getTime() + durationMs
+        if (now > deadline) {
+          await expireSubmission(s.id)
+        }
+      }
+    }
+  }
 
   const studentIds = submissions.map((s) => s.student_id)
   const { data: students } = await supabase
@@ -409,33 +455,50 @@ export async function getSubmissionsForAssessment(
     pendingBySubmission.set(pa.submission_id, (pendingBySubmission.get(pa.submission_id) ?? 0) + 1)
   }
 
-  return submissions.map((s) => ({
-    ...(s as SubmissionData),
-    student_name: studentMap.get(s.student_id)?.name ?? 'Unknown',
-    student_email: studentMap.get(s.student_id)?.email ?? 'Unknown',
-    pending_count: pendingBySubmission.get(s.id) ?? 0,
-  }))
-}
+  const { data: manualQuestions } = await supabase
+    .from('questions')
+    .select('id')
+    .eq('assessment_id', assessmentId)
+    .in('type', ['Essay', 'Coding'])
 
-export async function saveLiveAnswer(
-  sessionId: string,
-  studentId: string,
-  questionId: string,
-  answerContent: Record<string, unknown>,
-): Promise<{ error: string | null }> {
-  const supabase = createServiceClient()
+  if (manualQuestions && manualQuestions.length > 0) {
+    const manualQuestionIds = new Set(manualQuestions.map((q) => q.id))
 
-  const { error } = await supabase
-    .from('live_answers')
-    .upsert({
-      session_id: sessionId,
-      student_id: studentId,
-      question_id: questionId,
-      answer_content: answerContent,
-      auto_saved_at: new Date().toISOString(),
-    }, { onConflict: 'session_id,student_id,question_id' })
+    const { data: allAnswers } = await supabase
+      .from('answers')
+      .select('submission_id, question_id')
+      .in('submission_id', submissionIds)
+      .in('question_id', Array.from(manualQuestionIds))
 
-  return { error: error ? error.message : null }
+    const answeredBySubmission = new Map<string, Set<string>>()
+    for (const a of allAnswers ?? []) {
+      if (!answeredBySubmission.has(a.submission_id)) {
+        answeredBySubmission.set(a.submission_id, new Set())
+      }
+      answeredBySubmission.get(a.submission_id)!.add(a.question_id)
+    }
+
+    for (const s of submissions) {
+      const answered = answeredBySubmission.get(s.id) ?? new Set()
+      let unansweredCount = 0
+      for (const qId of manualQuestionIds) {
+        if (!answered.has(qId)) unansweredCount++
+      }
+      if (unansweredCount > 0) {
+        pendingBySubmission.set(s.id, (pendingBySubmission.get(s.id) ?? 0) + unansweredCount)
+      }
+    }
+  }
+
+  return {
+    submissions: submissions.map((s) => ({
+      ...(s as SubmissionData),
+      student_name: studentMap.get(s.student_id)?.name ?? 'Unknown',
+      student_email: studentMap.get(s.student_id)?.email ?? 'Unknown',
+      pending_count: pendingBySubmission.get(s.id) ?? 0,
+    })),
+    total: count ?? 0,
+  }
 }
 
 export async function convertLiveSession(
@@ -490,20 +553,93 @@ export async function convertLiveSession(
   }
 }
 
+export async function recalculateAssessmentScores(
+  assessmentId: string,
+): Promise<{ error: string | null }> {
+  const supabase = createServiceClient()
+
+  const { data: questions } = await supabase
+    .from('questions')
+    .select('id')
+    .eq('assessment_id', assessmentId)
+
+  const currentQuestionIds = new Set((questions ?? []).map((q) => q.id))
+
+  const { data: submissions } = await supabase
+    .from('submissions')
+    .select('id')
+    .in('status', ['submitted', 'expired'])
+    .eq('assessment_id', assessmentId)
+
+  if (!submissions || submissions.length === 0) {
+    return { error: null }
+  }
+
+  for (const submission of submissions) {
+    if (currentQuestionIds.size > 0) {
+      const { data: existingAnswers } = await supabase
+        .from('answers')
+        .select('id, question_id')
+        .eq('submission_id', submission.id)
+
+      const danglingIds = (existingAnswers ?? [])
+        .filter((a) => !currentQuestionIds.has(a.question_id))
+        .map((a) => a.id)
+
+      if (danglingIds.length > 0) {
+        await supabase
+          .from('answers')
+          .delete()
+          .in('id', danglingIds)
+      }
+    }
+
+    await gradeSubmission(supabase, submission.id)
+  }
+
+  return { error: null }
+}
+
 export async function gradeAnswer(
   answerId: string,
   score: number,
   feedback: string | null,
 ): Promise<{ error: string | null }> {
+  if (score < 0) return { error: 'Score cannot be negative' }
+
   const supabase = createServiceClient()
 
-  const { data: answer } = await supabase
-    .from('answers')
-    .select('id, submission_id')
-    .eq('id', answerId)
+  let questionId: string
+  let submissionId: string
+
+  if (answerId.startsWith('_unanswered_')) {
+    const parts = answerId.replace('_unanswered_', '').split('_')
+    submissionId = parts[0]
+    questionId = parts.slice(1).join('_')
+  } else {
+    const { data: answer } = await supabase
+      .from('answers')
+      .select('id, submission_id, question_id')
+      .eq('id', answerId)
+      .single()
+
+    if (!answer) return { error: 'Answer not found' }
+    submissionId = answer.submission_id
+    questionId = answer.question_id
+  }
+
+  const { data: question } = await supabase
+    .from('questions')
+    .select('points')
+    .eq('id', questionId)
     .single()
 
-  if (!answer) return { error: 'Answer not found' }
+  if (!question) return { error: 'Question not found' }
+  if (score > question.points) return { error: `Score exceeds maximum of ${question.points}` }
+
+  if (answerId.startsWith('_unanswered_')) {
+    return createAndGradeAnswer(supabase, submissionId, questionId, score, feedback)
+  }
 
   const { error } = await supabase
     .from('answers')
@@ -512,9 +648,129 @@ export async function gradeAnswer(
 
   if (error) return { error: error.message }
 
-  await recalculateTotal(answer.submission_id)
+  await recalculateTotal(submissionId)
 
   return { error: null }
+}
+
+async function isSubmissionOverdue(submission: { assessment_id: string; started_at: string }): Promise<boolean> {
+  const supabase = createServiceClient()
+
+  const { data: assessment } = await supabase
+    .from('assessments')
+    .select('duration_minutes, mode')
+    .eq('id', submission.assessment_id)
+    .single()
+
+  if (!assessment || assessment.mode !== 'timed' || !assessment.duration_minutes) return false
+
+  const deadline = new Date(submission.started_at).getTime() + assessment.duration_minutes * 60 * 1000
+  return Date.now() > deadline
+}
+
+async function createAndGradeAnswer(
+  supabase: ReturnType<typeof createServiceClient>,
+  submissionId: string,
+  questionId: string,
+  score: number,
+  feedback: string | null,
+): Promise<{ error: string | null }> {
+  const { error } = await supabase
+    .from('answers')
+    .upsert({
+      submission_id: submissionId,
+      question_id: questionId,
+      answer_content: {},
+      score,
+      is_correct: null,
+      feedback,
+    }, { onConflict: 'submission_id,question_id' })
+
+  if (error) return { error: error.message }
+
+  await recalculateTotal(submissionId)
+
+  return { error: null }
+}
+
+async function gradeSubmission(
+  supabase: SupabaseClient,
+  submissionId: string,
+): Promise<void> {
+  const { data: submission } = await supabase
+    .from('submissions')
+    .select('assessment_id')
+    .eq('id', submissionId)
+    .single()
+
+  if (!submission) return
+
+  const { data: questions } = await supabase
+    .from('questions')
+    .select('*')
+    .eq('assessment_id', submission.assessment_id)
+
+  if (!questions) return
+
+  const { data: answers } = await supabase
+    .from('answers')
+    .select('*')
+    .eq('submission_id', submissionId)
+
+  const answeredQuestionIds = new Set((answers ?? []).map((a) => a.question_id))
+
+  for (const answer of answers ?? []) {
+    const question = questions.find((q) => q.id === answer.question_id)
+    if (!question) continue
+
+    const content = question.content as Record<string, unknown>
+    const answerContent = answer.answer_content as Record<string, unknown>
+
+    const qType = questionTypeRegistry[question.type]
+    let score: number | null = null
+    let isCorrect: boolean | null = null
+
+    if (qType) {
+      const result = qType.gradeAnswer(content, answerContent, question.points)
+      score = result.score
+      isCorrect = result.isCorrect
+    }
+
+    const isManual = question.type === 'Essay' || question.type === 'Coding'
+    const isEmpty = !answerContent || Object.keys(answerContent).length === 0
+
+    if (score === null && answer.score !== null && answer.score !== undefined) {
+      score = answer.score
+      isCorrect = answer.is_correct
+    }
+
+    if (isManual && isEmpty && score === null) {
+      score = 0
+    }
+
+    await supabase
+      .from('answers')
+      .update({ score, is_correct: isCorrect })
+      .eq('id', answer.id)
+  }
+
+  for (const question of questions) {
+    if (answeredQuestionIds.has(question.id)) continue
+
+    const isManual = question.type === 'Essay' || question.type === 'Coding'
+    await supabase
+      .from('answers')
+      .upsert({
+        submission_id: submissionId,
+        question_id: question.id,
+        answer_content: {},
+        score: 0,
+        is_correct: isManual ? null : false,
+        feedback: null,
+      }, { onConflict: 'submission_id,question_id' })
+  }
+
+  await recalculateTotal(submissionId)
 }
 
 async function recalculateTotal(submissionId: string): Promise<void> {
@@ -543,6 +799,7 @@ export interface SubmissionResultAnswer extends AnswerData {
 }
 
 export interface StudentSubmissionResults {
+  resultStatus: 'released' | 'hidden' | 'no-submission'
   assessment: {
     title: string
     scores_released: boolean
@@ -551,6 +808,45 @@ export interface StudentSubmissionResults {
   }
   submission: SubmissionData | null
   answers: SubmissionResultAnswer[] | null
+}
+
+export interface SubmissionHistoryItem {
+  id: string
+  attempt_number: number
+  score_total: number | null
+  status: string
+  submitted_at: string | null
+  started_at: string
+}
+
+export async function getStudentSubmissionHistory(
+  assessmentId: string,
+  studentId: string,
+): Promise<SubmissionHistoryItem[]> {
+  const supabase = createServiceClient()
+
+  const { data: submissions } = await supabase
+    .from('submissions')
+    .select('id, score_total, status, submitted_at, started_at')
+    .eq('student_id', studentId)
+    .eq('assessment_id', assessmentId)
+    .in('status', ['submitted', 'expired'])
+    .order('started_at', { ascending: true })
+
+  if (!submissions || submissions.length === 0) return []
+
+  return submissions.map((s, idx) => ({
+    ...s,
+    attempt_number: idx + 1,
+  }))
+}
+
+function sanitizeQuestionContent(content: Record<string, unknown>): Record<string, unknown> {
+  const sanitized = { ...content }
+  delete sanitized.correctAnswer
+  delete sanitized.correctIndex
+  delete sanitized.options
+  return sanitized
 }
 
 export async function getStudentSubmissionResults(
@@ -586,6 +882,7 @@ export async function getStudentSubmissionResults(
 
   if (!submission) {
     return {
+      resultStatus: 'no-submission',
       assessment: {
         title: assessment.title,
         scores_released: assessment.scores_released,
@@ -602,15 +899,70 @@ export async function getStudentSubmissionResults(
     .select('*, questions!inner(id, type, content, points, order_index)')
     .eq('submission_id', submission.id)
 
+  let resultAnswers = (answers as SubmissionResultAnswer[]) ?? []
+
+  // Fill in unanswered questions so they appear in results
+  const answeredIds = new Set(resultAnswers.map((a) => a.question_id))
+  const { data: allQuestions } = await supabase
+    .from('questions')
+    .select('id, type, content, points, order_index')
+    .eq('assessment_id', assessmentId)
+    .order('order_index')
+
+  const unanswered = (allQuestions ?? []).filter((q) => !answeredIds.has(q.id))
+  if (unanswered.length > 0) {
+    const placeholderAnswers = unanswered.map((q) => ({
+      id: `_unanswered_${submission.id}_${q.id}`,
+      submission_id: submission.id,
+      question_id: q.id,
+      answer_content: {} as Record<string, unknown>,
+      score: null as number | null,
+      is_correct: null as boolean | null,
+      feedback: null as string | null,
+      questions: {
+        id: q.id,
+        type: q.type,
+        content: q.content as Record<string, unknown>,
+        points: q.points,
+        order_index: q.order_index,
+      },
+    }))
+    resultAnswers = [...resultAnswers, ...placeholderAnswers]
+  }
+
+  resultAnswers.sort((a, b) => (a.questions?.order_index ?? 0) - (b.questions?.order_index ?? 0))
+
+  if (!assessment.answer_reveal_enabled) {
+    resultAnswers = resultAnswers.map((a) => ({
+      ...a,
+      questions: {
+        ...a.questions,
+        content: sanitizeQuestionContent(a.questions.content),
+      },
+    }))
+  }
+
+  let resultSubmission = submission as SubmissionData
+
+  if (!assessment.scores_released) {
+    resultSubmission = { ...resultSubmission, score_total: null }
+    resultAnswers = resultAnswers.map((a) => ({
+      ...a,
+      score: null,
+      is_correct: null,
+    }))
+  }
+
   return {
+    resultStatus: assessment.scores_released ? 'released' : 'hidden',
     assessment: {
       title: assessment.title,
       scores_released: assessment.scores_released,
       answer_reveal_enabled: assessment.answer_reveal_enabled,
       total_points: totalPoints,
     },
-    submission: submission as SubmissionData,
-    answers: (answers as SubmissionResultAnswer[]) ?? [],
+    submission: resultSubmission,
+    answers: resultAnswers,
   }
 }
 
@@ -629,6 +981,38 @@ export async function deleteSubmission(
   return { error: null }
 }
 
+export async function verifySubmissionOwnership(
+  instructorId: string,
+  submissionId: string,
+): Promise<boolean> {
+  const supabase = createServiceClient()
+
+  const { data: submission } = await supabase
+    .from('submissions')
+    .select('id, assessment_id')
+    .eq('id', submissionId)
+    .single()
+
+  if (!submission) return false
+
+  const { data: assessment } = await supabase
+    .from('assessments')
+    .select('id, class_id')
+    .eq('id', submission.assessment_id)
+    .single()
+
+  if (!assessment) return false
+
+  const { data: cls } = await supabase
+    .from('classes')
+    .select('id')
+    .eq('id', assessment.class_id)
+    .eq('instructor_id', instructorId)
+    .single()
+
+  return !!cls
+}
+
 export async function recordViolation(
   submissionId: string,
 ): Promise<void> {
@@ -636,14 +1020,27 @@ export async function recordViolation(
 
   const { data: current } = await supabase
     .from('submissions')
-    .select('violations')
+    .select('violations, assessment_id')
     .eq('id', submissionId)
     .single()
 
-  const next = (current?.violations ?? 0) + 1
+  if (!current) return
+
+  const next = (current.violations ?? 0) + 1
 
   await supabase
     .from('submissions')
     .update({ violations: next })
     .eq('id', submissionId)
+
+  const { data: assessment } = await supabase
+    .from('assessments')
+    .select('proctoring_violations_allowed')
+    .eq('id', current.assessment_id)
+    .single()
+
+  const limit = assessment?.proctoring_violations_allowed
+  if (typeof limit === 'number' && next >= limit) {
+    await expireSubmission(submissionId)
+  }
 }

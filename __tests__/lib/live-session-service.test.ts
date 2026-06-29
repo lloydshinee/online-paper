@@ -11,6 +11,7 @@ import {
   getLiveSession,
   getLiveSessionByAssessment,
   hasActiveLiveSession,
+  saveLiveAnswer,
 } from '@/lib/live-session-service'
 import type { ParsedQuestion } from '@/lib/question-parser'
 
@@ -50,7 +51,7 @@ async function setupLiveAssessment() {
   await joinClass(student!.id, cls!.join_code)
 
   const { assessment } = await createAssessment(
-    instructor!.id, cls!.id, 'Live Assessment', 'live',
+    instructor!.id, cls!.id, 'Live Assessment', 'live', undefined,
   )
   await setAssessmentQuestions(assessment!.id, instructor!.id, [mcQuestion])
   await publishAssessment(assessment!.id, instructor!.id)
@@ -67,7 +68,7 @@ describe('live session service', () => {
     expect(result.error).toBeNull()
     expect(result.session).toBeDefined()
     expect(result.session!.status).toBe('waiting')
-    expect(result.session!.current_question_index).toBe(0)
+    expect(result.session!.current_question_index).toBe(-1)
     expect(result.session!.assessment_id).toBe(assessment.id)
   })
 
@@ -167,5 +168,24 @@ describe('live session service', () => {
 
     expect(result.sessionId).toBeNull()
     expect(result.assessmentId).toBeNull()
+  })
+
+  test('dual-join rejection: student in active session is detected', async () => {
+    const { instructor, student, assessment } = await setupLiveAssessment()
+
+    const { session } = await createLiveSession(instructor.id, assessment.id)
+    await startLiveSession(session!.id, instructor.id)
+
+    const fullSession = await getLiveSession(session!.id)
+    const questionId = fullSession!.questions[0].id
+
+    // Student joins by saving an answer
+    const saveResult = await saveLiveAnswer(session!.id, student.id, questionId, { selectedIndex: 0 })
+    expect(saveResult.error).toBeNull()
+
+    // Now hasActiveLiveSession should detect the student is in a session
+    const result = await hasActiveLiveSession(student.id)
+    expect(result.sessionId).toBe(session!.id)
+    expect(result.assessmentId).toBe(assessment.id)
   })
 })

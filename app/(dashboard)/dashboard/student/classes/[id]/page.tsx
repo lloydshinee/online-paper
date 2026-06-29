@@ -1,8 +1,10 @@
 import { requireAuth } from '@/lib/auth/require-auth'
 import { getStudentEnrolledClasses } from '@/app/actions/classes'
 import { getStudentClassAssessments } from '@/app/actions/timed-assessment'
-import { logoutAction } from '@/app/actions/auth'
-import { ArrowLeft, ClipboardList, Lightbulb } from 'lucide-react'
+import DashboardHeader from '@/components/dashboard-header'
+import { NotificationBell } from '@/app/(dashboard)/dashboard/student/notification-bell'
+import { ArrowLeft, Clock, CheckCircle2, Timer, Play, RotateCcw, Eye } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 
@@ -20,26 +22,18 @@ export default async function StudentClassPage({
 
   const { assessments } = await getStudentClassAssessments(id)
 
+  const pending = assessments.filter(
+    (a) => !a.submission || a.submission.status === 'in_progress'
+  )
+  const completed = assessments.filter(
+    (a) => a.submission && (a.submission.status === 'submitted' || a.submission.status === 'expired')
+  )
+
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <header className="border-b border-border">
-        <div className="mx-auto max-w-5xl flex items-center justify-between px-6 py-4">
-          <Link href="/dashboard" className="flex items-center gap-2 font-medium text-base">
-            <div className="flex size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-              <Lightbulb size={16} />
-            </div>
-            Online Paper
-          </Link>
-          <div className="flex items-center gap-3">
-            <span className="text-sm text-muted-foreground">{user.name}</span>
-            <form action={logoutAction}>
-              <button className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted transition-colors">
-                Sign out
-              </button>
-            </form>
-          </div>
-        </div>
-      </header>
+      <DashboardHeader userName={user.name ?? 'User'}>
+        <NotificationBell />
+      </DashboardHeader>
 
       <main className="mx-auto max-w-5xl px-6 py-10">
         <Link
@@ -50,119 +44,193 @@ export default async function StudentClassPage({
           Back to dashboard
         </Link>
 
-        <h1 className="text-2xl font-semibold tracking-tight mb-8">{cls.name}</h1>
-
-        <div className="rounded-xl border border-border">
-          <div className="border-b border-border px-6 py-4">
-            <div className="flex items-center gap-2">
-              <ClipboardList size={16} className="text-muted-foreground" />
-              <p className="text-sm font-medium">Assessments</p>
+        <div className="mb-8">
+          <h1 className="text-2xl font-semibold tracking-tight">{cls.name}</h1>
+          {assessments.length > 0 && (
+            <div className="flex items-center gap-4 mt-2">
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <Clock size={12} className="text-amber-500" />
+                {pending.length} pending
+              </div>
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <CheckCircle2 size={12} className="text-green-500" />
+                {completed.length} completed
+              </div>
             </div>
-            <p className="text-xs text-muted-foreground">{assessments.length} assessment{assessments.length !== 1 ? 's' : ''}</p>
+          )}
+        </div>
+
+        {assessments.length === 0 ? (
+          <div className="rounded-xl border border-border p-12 text-center">
+            <div className="mb-4 flex size-12 items-center justify-center rounded-full bg-muted mx-auto">
+              <Clock size={24} className="text-muted-foreground" />
+            </div>
+            <h2 className="text-base font-medium mb-1">No assessments published yet</h2>
+            <p className="text-sm text-muted-foreground max-w-md mx-auto">
+              Check back later for new assessments from your instructor.
+            </p>
           </div>
-          <div className="px-6 py-4">
-            {assessments.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-4 text-center">
-                No assessments published yet.
-              </p>
-            ) : (
-              <div className="divide-y divide-border -mx-6">
-                {assessments.map((a) => (
-                  <div key={a.id} className="flex items-center justify-between px-6 py-4">
-                    <div>
-                      <p className="text-sm font-medium">{a.title}</p>
-                      <div className="flex items-center gap-2 mt-1">
-                        <span className="text-xs text-muted-foreground capitalize">{a.mode}</span>
-                        {a.duration_minutes && (
-                          <span className="text-xs text-muted-foreground">{a.duration_minutes} min</span>
-                        )}
-                      </div>
-                    </div>
-                    <div>
-                      {(() => {
-                        const sub = (a as Record<string, unknown>).submission as { status: string; score_total: number | null } | null
-                        const href = `/dashboard/student/classes/${id}/assessments/${a.id}`
+        ) : (
+          <div className="grid gap-6 md:grid-cols-2">
+            {/* Pending */}
+            <section>
+              <div className="flex items-center gap-2 mb-3">
+                <Clock size={15} className="text-amber-500" />
+                <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Pending</h2>
+                <Badge variant="secondary" className="ml-1">{pending.length}</Badge>
+              </div>
+              {pending.length === 0 ? (
+                <div className="rounded-xl border border-border px-5 py-8 text-center">
+                  <p className="text-sm text-muted-foreground">No pending assessments</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {pending.map((a) => {
+                    const isInProgress = a.submission?.status === 'in_progress'
+                    const isLive = a.mode === 'live' && a.state === 'active'
+                    const notAccepting = a.accepting_submissions === false && !isLive
+                    const href = `/dashboard/student/classes/${id}/assessments/${a.id}`
 
-                        if (sub?.status === 'in_progress') {
-                          return (
-                            <Link
-                              href={href}
-                              className="rounded-md bg-primary px-4 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
-                            >
-                              Resume
-                            </Link>
-                          )
-                        }
+                    return (
+                      <div
+                        key={a.id}
+                        className="group rounded-xl border border-border bg-card hover:border-primary/30 hover:shadow-sm transition-all"
+                      >
+                        <div className="p-5">
+                          <div className="flex items-start justify-between gap-3 mb-3">
+                            <div className="min-w-0 flex-1">
+                              <h3 className="text-sm font-semibold truncate">{a.title}</h3>
+                            </div>
+                            {isLive ? (
+                              <Badge variant="default" className="shrink-0 bg-red-500 hover:bg-red-500">Live</Badge>
+                            ) : isInProgress ? (
+                              <Badge variant="secondary" className="shrink-0">In progress</Badge>
+                            ) : (
+                              <Badge variant="outline" className="shrink-0">New</Badge>
+                            )}
+                          </div>
 
-                        if (sub?.status === 'submitted' || sub?.status === 'expired') {
-                          if (a.scores_released) {
-                            return (
-                              <Link
-                                href={href}
-                                className="inline-flex items-center gap-1 rounded-md bg-primary px-4 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
-                              >
-                                View results
-                              </Link>
-                            )
-                          }
-                          return (
-                            <span className="rounded-md bg-green-100 dark:bg-green-900/20 px-3 py-1.5 text-xs text-green-700 dark:text-green-400 font-medium">
-                              Submitted
-                            </span>
-                          )
-                        }
+                          <div className="flex items-center gap-2 mb-4">
+                            <Badge variant="secondary" className="text-[10px] px-1.5 py-0 capitalize h-4">
+                              {a.mode === 'timed' ? 'Timed' : 'Live session'}
+                            </Badge>
+                            {a.mode === 'timed' && a.duration_minutes && (
+                              <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+                                <Timer size={10} />
+                                {a.duration_minutes} min
+                              </span>
+                            )}
+                          </div>
 
-                        if (a.state === 'active' && a.mode === 'timed' && a.accepting_submissions !== false) {
-                          return (
-                            <Link
-                              href={href}
-                              className="rounded-md bg-primary px-4 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
-                            >
-                              Start
-                            </Link>
-                          )
-                        }
-
-                        if (a.state === 'active' && a.mode === 'live') {
-                          return (
+                          {isLive ? (
                             <Link
                               href={`${href}/live`}
-                              className="rounded-md bg-primary px-4 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+                              className="inline-flex items-center justify-center gap-1.5 w-full rounded-md bg-red-500 px-4 py-2 text-xs font-medium text-white hover:bg-red-600 transition-colors"
                             >
-                              Join Live
+                              <Play size={13} /> Join Live
                             </Link>
-                          )
-                        }
-
-                        if (a.state === 'active' && a.accepting_submissions === false) {
-                          return (
-                            <span className="rounded-md bg-muted px-3 py-1.5 text-xs text-muted-foreground">
-                              Not accepting
+                          ) : isInProgress ? (
+                            <Link
+                              href={href}
+                              className="inline-flex items-center justify-center gap-1.5 w-full rounded-md bg-amber-500 px-4 py-2 text-xs font-medium text-white hover:bg-amber-600 transition-colors"
+                            >
+                              <RotateCcw size={13} /> Resume
+                            </Link>
+                          ) : notAccepting ? (
+                            <span className="inline-flex items-center justify-center gap-1.5 w-full rounded-md bg-muted px-4 py-2 text-xs font-medium text-muted-foreground">
+                              Not accepting submissions
                             </span>
-                          )
-                        }
+                          ) : (
+                            <Link
+                              href={href}
+                              className="inline-flex items-center justify-center gap-1.5 w-full rounded-md bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+                            >
+                              <Play size={13} /> Start Assessment
+                            </Link>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </section>
 
-                        if (a.state !== 'active') {
-                          return (
-                            <span className="rounded-md bg-muted px-3 py-1.5 text-xs text-muted-foreground">
-                              Draft
-                            </span>
-                          )
-                        }
-
-                        return (
-                          <span className="rounded-md bg-muted px-3 py-1.5 text-xs text-muted-foreground">
-                            Live
-                          </span>
-                        )
-                      })()}
-                    </div>
-                  </div>
-                ))}
+            {/* Completed */}
+            <section>
+              <div className="flex items-center gap-2 mb-3">
+                <CheckCircle2 size={15} className="text-green-500" />
+                <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Completed</h2>
+                <Badge variant="secondary" className="ml-1">{completed.length}</Badge>
               </div>
-            )}
+              {completed.length === 0 ? (
+                <div className="rounded-xl border border-border px-5 py-8 text-center">
+                  <p className="text-sm text-muted-foreground">No completed assessments</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {completed.map((a) => {
+                    const href = `/dashboard/student/classes/${id}/assessments/${a.id}`
+                    const hasScore = a.submission?.score_total != null
+                    const scoresReleased = a.scores_released
+                    const canRetake = a.retakes_allowed
+
+                    return (
+                      <div
+                        key={a.id}
+                        className="group rounded-xl border border-border bg-card hover:border-primary/30 hover:shadow-sm transition-all"
+                      >
+                        <div className="p-5">
+                          <div className="flex items-start justify-between gap-3 mb-3">
+                            <div className="min-w-0 flex-1">
+                              <h3 className="text-sm font-semibold truncate">{a.title}</h3>
+                            </div>
+                            {hasScore && scoresReleased ? (
+                              <Badge variant="default" className="shrink-0 bg-green-600 hover:bg-green-600">
+                                {a.submission!.score_total} pts
+                              </Badge>
+                            ) : (
+                              <Badge variant="secondary" className="shrink-0">Submitted</Badge>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-2 mb-4">
+                            <Badge variant="secondary" className="text-[10px] px-1.5 py-0 capitalize h-4">
+                              {a.mode === 'timed' ? 'Timed' : 'Live session'}
+                            </Badge>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            {scoresReleased ? (
+                              <Link
+                                href={href}
+                                className="inline-flex items-center justify-center gap-1.5 flex-1 rounded-md bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+                              >
+                                <Eye size={13} /> View results
+                              </Link>
+                            ) : (
+                              <span className="inline-flex items-center justify-center gap-1.5 flex-1 rounded-md bg-green-50 dark:bg-green-900/10 px-4 py-2 text-xs font-medium text-green-700 dark:text-green-400">
+                                <CheckCircle2 size={13} /> Submitted
+                              </span>
+                            )}
+                            {canRetake && (
+                              <Link
+                                href={a.mode === 'live' ? `${href}/live` : `${href}?retake=1`}
+                                className="inline-flex items-center justify-center gap-1.5 rounded-md border border-border px-4 py-2 text-xs font-medium hover:bg-muted transition-colors"
+                              >
+                                <RotateCcw size={13} /> Retake
+                              </Link>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </section>
           </div>
-        </div>
+        )}
       </main>
     </div>
   )

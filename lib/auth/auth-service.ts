@@ -3,8 +3,9 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 export interface UserProfile {
   id: string
   email: string
-  name: string
+  name: string | null
   role: 'admin' | 'instructor' | 'student'
+  created_at?: string
 }
 
 export interface AuthResult {

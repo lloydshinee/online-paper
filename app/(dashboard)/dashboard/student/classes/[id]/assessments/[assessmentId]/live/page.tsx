@@ -54,6 +54,7 @@ export default function StudentLivePage({
   const answerRef = useRef(answer)
   const sessionRef = useRef(session)
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
     answerRef.current = answer
@@ -68,6 +69,7 @@ export default function StudentLivePage({
     setAutosaveStatus('saving')
     await saveLiveAnswerAction(session.id, currentQuestion.id, answerRef.current)
     setAutosaveStatus('saved')
+    channelRef.current?.send({ type: 'broadcast', event: 'answer', payload: { questionId: currentQuestion.id } })
     setTimeout(() => setAutosaveStatus('idle'), 1500)
   }, [session, currentQuestion])
 
@@ -89,8 +91,7 @@ export default function StudentLivePage({
 
       const result = await getLiveSessionByAssessmentAction(assessmentId)
       if (!result) {
-        setError('No active live session found.')
-        setViewState('error')
+        setViewState('waiting')
         return
       }
 
@@ -116,6 +117,45 @@ export default function StudentLivePage({
     init()
   }, [assessmentId])
 
+  useEffect(() => {
+    if (viewState !== 'waiting' || session) return
+
+    pollRef.current = setInterval(async () => {
+      const result = await getLiveSessionByAssessmentAction(assessmentId)
+      if (!result) return
+
+      clearInterval(pollRef.current!)
+      pollRef.current = null
+
+      if (result.status === 'ended') {
+        setViewState('ended')
+        return
+      }
+
+      setSession({
+        id: result.id,
+        assessment_id: result.assessment_id,
+        current_question_index: result.current_question_index,
+        status: result.status,
+      })
+      setQuestions(result.questions)
+
+      if (result.status === 'active') {
+        setCurrentQuestion(result.questions[result.current_question_index] ?? null)
+        setViewState('active')
+        const saved = await getStudentLiveAnswerAction(result.id, result.questions[result.current_question_index]?.id ?? '')
+        if (saved) setAnswer(saved)
+      }
+    }, 3000)
+
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+    }
+  }, [viewState, session, assessmentId])
+
   // Subscribe to Realtime channel
   useEffect(() => {
     if (!session) return
@@ -127,13 +167,6 @@ export default function StudentLivePage({
     channelRef.current = channel
 
     channel
-      .on('broadcast', { event: 'start' }, () => {
-        setSession((prev) => prev ? { ...prev, status: 'active' } : prev)
-        setViewState('active')
-        if (questions.length > 0) {
-          setCurrentQuestion(questions[0])
-        }
-      })
       .on('broadcast', { event: 'next' }, (payload) => {
         const data = payload.payload as { questionIndex: number; question: QuestionData }
         setSession((prev) => prev ? { ...prev, current_question_index: data.questionIndex } : prev)
@@ -260,6 +293,8 @@ export default function StudentLivePage({
   }
 
   if (viewState === 'waiting') {
+    const hasSession = session !== null
+
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center max-w-md">
@@ -268,12 +303,21 @@ export default function StudentLivePage({
           </div>
           <h2 className="text-lg font-semibold mb-2">Waiting for instructor</h2>
           <p className="text-sm text-muted-foreground mb-2">
-            The session hasn&apos;t started yet. The instructor will begin shortly.
+            {hasSession
+              ? "The session hasn&apos;t started yet. The instructor will begin shortly."
+              : "The instructor has not created the session yet. You will join automatically once it's ready."}
           </p>
-          <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
-            <Users size={12} />
-            {studentCount > 0 ? `${studentCount} student${studentCount !== 1 ? 's' : ''} connected` : 'You are the first one here'}
-          </div>
+          {hasSession && (
+            <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
+              <Users size={12} />
+              {studentCount > 0 ? `${studentCount} student${studentCount !== 1 ? 's' : ''} connected` : 'You are the first one here'}
+            </div>
+          )}
+          {!hasSession && (
+            <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground animate-pulse mt-3">
+              Checking for session...
+            </div>
+          )}
         </div>
       </div>
     )
@@ -305,7 +349,9 @@ export default function StudentLivePage({
       <main className="mx-auto max-w-4xl px-6 py-10">
         <div className="flex items-center gap-3 mb-8">
           <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-            Q{session!.current_question_index + 1}/{questions.length}
+            {session!.current_question_index >= 0
+              ? `Q${session!.current_question_index + 1}/${questions.length}`
+              : `-/${questions.length}`}
           </span>
           {currentQuestion && (
             <>
@@ -315,7 +361,7 @@ export default function StudentLivePage({
           )}
         </div>
 
-        {currentQuestion && (
+        {currentQuestion ? (
           <div className="rounded-xl border border-border">
             <div className="px-6 py-6">
               {currentQuestion.type === 'MultipleChoice' && (
@@ -354,6 +400,16 @@ export default function StudentLivePage({
                 />
               )}
             </div>
+          </div>
+        ) : (
+          <div className="rounded-xl border border-border p-12 text-center">
+            <div className="mb-4 flex size-12 items-center justify-center rounded-full bg-muted mx-auto">
+              <Clock3 size={24} className="text-muted-foreground" />
+            </div>
+            <h2 className="text-lg font-semibold mb-2">Waiting for the instructor</h2>
+            <p className="text-sm text-muted-foreground">
+              The instructor will begin the first question shortly.
+            </p>
           </div>
         )}
 

@@ -100,7 +100,11 @@ export default function LandingPage() {
           <Link href="/register" className="rounded-md bg-primary px-6 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors">
             Start for free
           </Link>
-          <button className="rounded-md border border-border px-6 py-2.5 text-sm font-medium hover:bg-muted transition-colors">
+          <button
+            onClick={() => {
+              document.getElementById('how-it-works')?.scrollIntoView({ behavior: 'smooth' })
+            }}
+            className="rounded-md border border-border px-6 py-2.5 text-sm font-medium hover:bg-muted transition-colors">
             See how it works
           </button>
         </div>
@@ -179,7 +183,7 @@ export default function LandingPage() {
       </section>
 
       {/* How it works */}
-      <section className="mx-auto max-w-5xl px-6 pb-20">
+      <section id="how-it-works" className="mx-auto max-w-5xl px-6 pb-20">
         <p className="mb-3 text-xs font-medium uppercase tracking-widest text-primary">How it works</p>
         <h2 className="mb-3 text-3xl font-semibold tracking-tight">Up and running in minutes</h2>
         <p className="mb-10 max-w-md text-base text-muted-foreground">No training sessions. No IT tickets.</p>

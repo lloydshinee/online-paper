@@ -1,9 +1,8 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { createClient } from '@/lib/supabase/server'
 import { authorize } from '@/lib/auth/authorize'
-import { saveLiveAnswer } from '@/lib/submission-service'
+import { getAssessmentBasic } from '@/lib/assessment-service'
 import {
   createLiveSession,
   startLiveSession,
@@ -12,20 +11,17 @@ import {
   getLiveSession,
   getLiveSessionByAssessment,
   getStudentLiveAnswer,
+  getQuestionAnswerCount,
+  getSessionAnswerCounts,
   hasActiveLiveSession,
+  saveLiveAnswer,
 } from '@/lib/live-session-service'
 
 export async function createLiveSessionAction(assessmentId: string) {
   const auth = await authorize(['instructor'])
   if ('error' in auth) return { session: null, error: auth.error }
 
-  const supabase = await createClient()
-  const { data: assessment } = await supabase
-    .from('assessments')
-    .select('id, class_id')
-    .eq('id', assessmentId)
-    .single()
-
+  const assessment = await getAssessmentBasic(assessmentId)
   if (!assessment) return { session: null, error: 'Assessment not found' }
 
   const result = await createLiveSession(auth.userId, assessmentId)
@@ -41,12 +37,7 @@ export async function startLiveSessionAction(sessionId: string, assessmentId: st
   const auth = await authorize(['instructor'])
   if ('error' in auth) return { session: null, error: auth.error }
 
-  const supabase = await createClient()
-  const { data: assessment } = await supabase
-    .from('assessments')
-    .select('id, class_id')
-    .eq('id', assessmentId)
-    .single()
+  const assessment = await getAssessmentBasic(assessmentId)
 
   const result = await startLiveSession(sessionId, auth.userId)
 
@@ -71,12 +62,7 @@ export async function endLiveSessionAction(sessionId: string, assessmentId: stri
   const auth = await authorize(['instructor'])
   if ('error' in auth) return { session: null, error: auth.error }
 
-  const supabase = await createClient()
-  const { data: assessment } = await supabase
-    .from('assessments')
-    .select('id, class_id')
-    .eq('id', assessmentId)
-    .single()
+  const assessment = await getAssessmentBasic(assessmentId)
 
   const result = await endLiveSession(sessionId, auth.userId)
 
@@ -106,7 +92,7 @@ export async function saveLiveAnswerAction(
   questionId: string,
   answerContent: Record<string, unknown>,
 ) {
-  const auth = await authorize()
+  const auth = await authorize(['student'])
   if ('error' in auth) return { error: auth.error }
 
   return saveLiveAnswer(sessionId, auth.userId, questionId, answerContent)
@@ -116,10 +102,30 @@ export async function getStudentLiveAnswerAction(
   sessionId: string,
   questionId: string,
 ) {
-  const auth = await authorize()
+  const auth = await authorize(['student'])
   if ('error' in auth) return null
 
   return getStudentLiveAnswer(sessionId, auth.userId, questionId)
+}
+
+export async function getQuestionAnswerCountAction(
+  sessionId: string,
+  questionId: string,
+): Promise<number> {
+  const auth = await authorize()
+  if ('error' in auth) return 0
+
+  return getQuestionAnswerCount(sessionId, questionId)
+}
+
+export async function getSessionAnswerCountsAction(
+  sessionId: string,
+  questionIds: string[],
+): Promise<Record<string, number>> {
+  const auth = await authorize()
+  if ('error' in auth) return {}
+
+  return getSessionAnswerCounts(sessionId, questionIds)
 }
 
 export async function checkActiveLiveSessionAction() {

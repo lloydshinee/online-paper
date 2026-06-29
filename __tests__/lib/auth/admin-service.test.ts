@@ -67,7 +67,7 @@ describe('admin service', () => {
     testEmails.push(email)
     const password = 'TempPass123!'
 
-    const { user } = await createUser(email, password, 'instructor')
+    const { user } = await createUser(email, password, 'Test User', 'instructor')
     expect(user).toBeDefined()
 
     const result = await deactivateUser(user!.id)
@@ -84,7 +84,7 @@ describe('admin service', () => {
     const oldPassword = 'OldPass123!'
     const newPassword = 'NewPass456!'
 
-    const { user } = await createUser(email, oldPassword, 'instructor')
+    const { user } = await createUser(email, oldPassword, 'Test User', 'instructor')
     expect(user).toBeDefined()
 
     const result = await resetPassword(user!.id, newPassword)

@@ -201,13 +201,32 @@ export async function getClassRoster(
   return { students: (students as StudentProfile[]) ?? [], error: null }
 }
 
-export async function archiveClass(classId: string): Promise<ClassResult> {
+export async function getInstructorClasses(
+  instructorId: string,
+): Promise<{ classes: ClassData[]; error: string | null }> {
+  const supabase = createServiceClient()
+  const { data, error } = await supabase
+    .from('classes')
+    .select('id, instructor_id, name, join_code, archived, created_at')
+    .eq('instructor_id', instructorId)
+    .order('created_at', { ascending: false })
+
+  return { classes: (data as ClassData[]) ?? [], error: error?.message ?? null }
+}
+
+export async function archiveClass(classId: string, instructorId?: string): Promise<ClassResult> {
   const supabase = createServiceClient()
 
-  const { data, error } = await supabase
+  let query = supabase
     .from('classes')
     .update({ archived: true })
     .eq('id', classId)
+
+  if (instructorId) {
+    query = query.eq('instructor_id', instructorId)
+  }
+
+  const { data, error } = await query
     .select('id, instructor_id, name, join_code, archived, created_at')
     .single()
 

@@ -6,64 +6,37 @@ import {
   startSubmission,
   saveAnswer,
   submitAssessment,
-  getQuestionsForAssessment,
-  getAssessmentTimeLimit,
   getStudentSubmissionResults,
+  getStudentSubmissionHistory,
   getActiveSubmission,
   recordViolation,
 } from '@/lib/submission-service'
+import {
+  getStudentAssessments as getStudentAssessmentsService,
+  getAllStudentAssessments as getAllStudentAssessmentsService,
+  getAssessmentQuestions,
+  getAssessmentTimeLimit,
+} from '@/lib/assessment-service'
 
 export async function getStudentClassAssessments(classId: string) {
   const auth = await authorize()
   if ('error' in auth) return { assessments: [], error: auth.error }
 
-  const supabase = await createClient()
-  const { data: enrollment } = await supabase
-    .from('class_enrollments')
-    .select('id')
-    .eq('student_id', auth.userId)
-    .eq('class_id', classId)
-    .maybeSingle()
-
-  if (!enrollment) return { assessments: [], error: 'Not enrolled' }
-
-  const { data: assessments } = await supabase
-    .from('assessments')
-    .select('id, class_id, title, mode, state, duration_minutes, accepting_submissions, scores_released, created_at')
-    .eq('class_id', classId)
-    .order('created_at', { ascending: false })
-
-  if (!assessments || assessments.length === 0) {
-    return { assessments: [], error: null }
-  }
-
-  const assessmentIds = assessments.map((a) => a.id)
-  const { data: submissions } = await supabase
-    .from('submissions')
-    .select('id, assessment_id, status, score_total')
-    .eq('student_id', auth.userId)
-    .in('assessment_id', assessmentIds)
-
-  const submissionByAssessment = new Map<string, { status: string; score_total: number | null }>()
-  for (const s of submissions ?? []) {
-    if (!submissionByAssessment.has(s.assessment_id)) {
-      submissionByAssessment.set(s.assessment_id, { status: s.status, score_total: s.score_total })
-    }
-  }
-
-  const assessmentsWithSubs = assessments.map((a) => ({
-    ...a,
-    submission: submissionByAssessment.get(a.id) ?? null,
-  }))
-
-  return { assessments: assessmentsWithSubs, error: null }
+  return getStudentAssessmentsService(auth.userId, classId)
 }
 
-export async function startAssessmentAction(assessmentId: string) {
+export async function getDashboardAssessments() {
+  const auth = await authorize(['student'])
+  if ('error' in auth) return { assessments: [], error: auth.error }
+
+  return getAllStudentAssessmentsService(auth.userId)
+}
+
+export async function startAssessmentAction(assessmentId: string, retake = false) {
   const auth = await authorize(['student'])
   if ('error' in auth) return { error: auth.error, submissionId: null }
 
-  const result = await startSubmission(auth.userId, assessmentId)
+  const result = await startSubmission(auth.userId, assessmentId, retake ? { retake: true } : undefined)
 
   if (result.error) {
     return { error: result.error, submissionId: null }
@@ -95,16 +68,18 @@ export async function getAssessmentData(assessmentId: string) {
   if ('error' in auth) return null
 
   const supabase = await createClient()
-  const questions = await getQuestionsForAssessment(assessmentId)
+  const questions = await getAssessmentQuestions(assessmentId)
   const timeLimit = await getAssessmentTimeLimit(assessmentId)
 
   const { data: assessment } = await supabase
     .from('assessments')
-    .select('id, class_id, title, mode, state, duration_minutes, accepting_submissions, scores_released, answer_reveal_enabled, proctoring_violations_allowed')
+    .select('id, class_id, title, mode, state, duration_minutes, accepting_submissions, scores_released, answer_reveal_enabled, retakes_allowed, proctoring_violations_allowed')
     .eq('id', assessmentId)
     .single()
 
   if (!assessment) return null
+
+  if (assessment.state === 'draft') return null
 
   return { assessment, questions, timeLimit }
 }
@@ -114,6 +89,13 @@ export async function getSubmissionResultsAction(assessmentId: string) {
   if ('error' in auth) return null
 
   return getStudentSubmissionResults(assessmentId, auth.userId)
+}
+
+export async function getSubmissionHistoryAction(assessmentId: string) {
+  const auth = await authorize()
+  if ('error' in auth) return []
+
+  return getStudentSubmissionHistory(assessmentId, auth.userId)
 }
 
 export async function getActiveSubmissionAction(assessmentId: string) {
