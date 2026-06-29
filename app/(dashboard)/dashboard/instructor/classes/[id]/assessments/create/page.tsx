@@ -44,7 +44,7 @@ export default function CreateAssessmentPage({ params: paramsPromise }: { params
 
           <div className="flex flex-col gap-1.5">
             <label htmlFor="title" className="text-sm font-medium">Title</label>
-            <input id="title" name="title" type="text" required maxLength={200}
+            <input id="title" name="title" type="text" required
               className="flex h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
               placeholder="e.g. Midterm Exam" />
           </div>

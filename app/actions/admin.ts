@@ -3,7 +3,6 @@
 import { revalidatePath } from 'next/cache'
 import { createServiceClient } from '@/lib/supabase/service'
 import { authorize } from '@/lib/auth/authorize'
-import { sanitize } from '@/lib/sanitize'
 import {
   createUser,
   deactivateUser,
@@ -25,10 +24,8 @@ export async function createUserAction(
 
   const email = formData.get('email') as string
   const password = formData.get('password') as string
-  const rawName = formData.get('name') as string
+  const name = formData.get('name') as string
   const role = formData.get('role') as 'admin' | 'instructor'
-
-  const name = sanitize(rawName.trim())
 
   if (!email || !password || !name || !role) {
     return { error: 'All fields are required' }

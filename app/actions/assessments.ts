@@ -2,7 +2,6 @@
 
 import { revalidatePath } from 'next/cache'
 import { authorize } from '@/lib/auth/authorize'
-import { sanitize } from '@/lib/sanitize'
 import {
   createAssessment,
   publishAssessment,
@@ -31,18 +30,12 @@ export async function createAssessmentAction(
   if ('error' in auth) return { error: auth.error }
 
   const classId = formData.get('classId') as string
-  const title = (formData.get('title') as string)
+  const title = formData.get('title') as string
   const mode = formData.get('mode') as string
   const durationMinutes = formData.get('durationMinutes') as string
 
-  const sanitizedTitle = sanitize(title.trim())
-
-  if (!classId || !sanitizedTitle || !mode) {
+  if (!classId || !title || !mode) {
     return { error: 'All fields are required' }
-  }
-
-  if (sanitizedTitle.length > 200) {
-    return { error: 'Title must be 200 characters or fewer' }
   }
 
   if (mode === 'timed' && (!durationMinutes || parseInt(durationMinutes) < 1)) {
@@ -52,7 +45,7 @@ export async function createAssessmentAction(
   const result = await createAssessment(
     auth.userId,
     classId,
-    sanitizedTitle,
+    title.trim(),
     mode as 'timed' | 'live',
     mode === 'timed' ? parseInt(durationMinutes) : undefined,
   )
@@ -183,15 +176,7 @@ export async function updateAssessmentSettingsAction(
   const auth = await authorize(['instructor'])
   if ('error' in auth) return { error: auth.error }
 
-  const sanitized = { ...updates }
-  if (sanitized.title) {
-    sanitized.title = sanitize(sanitized.title.trim())
-    if (sanitized.title.length > 200) {
-      return { error: 'Title must be 200 characters or fewer' }
-    }
-  }
-
-  const result = await updateAssessmentSettings(assessmentId, auth.userId, sanitized)
+  const result = await updateAssessmentSettings(assessmentId, auth.userId, updates)
 
   if (result.error) {
     return { error: result.error }

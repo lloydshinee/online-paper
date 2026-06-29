@@ -49,12 +49,6 @@ export default function RegisterPage() {
                 placeholder="••••••••" />
               <p className="text-xs text-muted-foreground">At least 6 characters</p>
             </div>
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor="confirmPassword" className="text-sm font-medium">Confirm password</label>
-              <input id="confirmPassword" name="confirmPassword" type="password" required
-                className="flex h-10 w-full rounded-lg border border-border bg-transparent px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring transition-colors"
-                placeholder="••••••••" />
-            </div>
             {state?.error && <p className="text-sm text-destructive">{state.error}</p>}
             <button type="submit" disabled={pending}
               className="flex h-10 w-full items-center justify-center rounded-lg bg-primary text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50">

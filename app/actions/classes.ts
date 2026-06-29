@@ -4,7 +4,6 @@ import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { authorize } from '@/lib/auth/authorize'
 import { getUser } from '@/lib/auth/auth-service'
-import { sanitize } from '@/lib/sanitize'
 import {
   createClass,
   joinClass,
@@ -26,14 +25,13 @@ export async function createClassAction(
   const auth = await authorize(['instructor'])
   if ('error' in auth) return { error: auth.error }
 
-  const rawName = formData.get('name') as string
-  const name = sanitize(rawName.trim())
+  const name = formData.get('name') as string
 
-  if (!name) {
+  if (!name || !name.trim()) {
     return { error: 'Class name is required' }
   }
 
-  const result = await createClass(auth.userId, name)
+  const result = await createClass(auth.userId, name.trim())
 
   if (result.error) {
     return { error: result.error }

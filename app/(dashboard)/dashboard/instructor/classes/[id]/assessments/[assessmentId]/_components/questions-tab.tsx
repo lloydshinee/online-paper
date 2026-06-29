@@ -96,7 +96,6 @@ export default function QuestionsTab({ assessmentId, isDraft }: QuestionsTabProp
   function addParsed() {
     const parsed = parseQuestions(questionText)
     if (parsed.length > 0) { setQuestions((prev) => [...prev, ...parsed]); setQuestionText('') }
-    else { setError('No valid questions found. Check the format and try again.') }
   }
 
   function removeQuestion(idx: number) { setQuestions((prev) => prev.filter((_, i) => i !== idx)) }

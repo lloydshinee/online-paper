@@ -117,7 +117,7 @@ export default function SettingsTab({ assessmentId, classId, assessment, onAsses
             <label className="text-xs text-muted-foreground">Title</label>
             {editingTitle ? (
               <div className="flex items-center gap-2">
-                <input value={titleInput} onChange={(e) => setTitleInput(e.target.value)} maxLength={200}
+                <input value={titleInput} onChange={(e) => setTitleInput(e.target.value)}
                   className="flex-1 h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring" />
                 <button onClick={handleSaveTitle}
                   className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90">Save</button>
