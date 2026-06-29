@@ -21,8 +21,22 @@ function getRoleFromError(error: Error | null): string | null {
   return error.message
 }
 
+async function fetchProfile(
+  serviceClient: SupabaseClient,
+  userId: string,
+): Promise<UserProfile | null> {
+  const { data: profile } = await serviceClient
+    .from('users')
+    .select('id, email, name, role')
+    .eq('id', userId)
+    .single()
+
+  return (profile as UserProfile) ?? null
+}
+
 export async function register(
   supabase: SupabaseClient,
+  serviceClient: SupabaseClient,
   email: string,
   password: string,
   name: string,
@@ -37,20 +51,17 @@ export async function register(
     return { user: null, error: getRoleFromError(error) }
   }
 
-  const { data: profile } = await supabase
-    .from('users')
-    .select('id, email, name, role')
-    .eq('id', data.user.id)
-    .single()
+  const profile = await fetchProfile(serviceClient, data.user.id)
 
   return {
-    user: profile as UserProfile | null,
+    user: profile,
     error: null,
   }
 }
 
 export async function login(
   supabase: SupabaseClient,
+  serviceClient: SupabaseClient,
   email: string,
   password: string,
 ): Promise<AuthResult> {
@@ -63,32 +74,23 @@ export async function login(
     return { user: null, error: getRoleFromError(error) }
   }
 
-  const { data: profile } = await supabase
-    .from('users')
-    .select('id, email, name, role')
-    .eq('id', data.user.id)
-    .single()
+  const profile = await fetchProfile(serviceClient, data.user.id)
 
   return {
-    user: profile as UserProfile | null,
+    user: profile,
     error: null,
   }
 }
 
 export async function getUser(
   supabase: SupabaseClient,
+  serviceClient: SupabaseClient,
 ): Promise<UserProfile | null> {
   const { data } = await supabase.auth.getUser()
 
   if (!data.user) return null
 
-  const { data: profile } = await supabase
-    .from('users')
-    .select('id, email, name, role')
-    .eq('id', data.user.id)
-    .single()
-
-  return (profile as UserProfile) ?? null
+  return fetchProfile(serviceClient, data.user.id)
 }
 
 export async function logout(supabase: SupabaseClient): Promise<void> {

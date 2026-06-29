@@ -2,6 +2,7 @@
 
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/service'
 import { register, login, logout } from '@/lib/auth/auth-service'
 
 interface AuthFormState {
@@ -26,7 +27,8 @@ export async function registerAction(
   }
 
   const supabase = await createClient()
-  const result = await register(supabase, email, password, name)
+  const serviceClient = createServiceClient()
+  const result = await register(supabase, serviceClient, email, password, name)
 
   if (result.error) {
     return { error: result.error, email }
@@ -47,7 +49,8 @@ export async function loginAction(
   }
 
   const supabase = await createClient()
-  const result = await login(supabase, email, password)
+  const serviceClient = createServiceClient()
+  const result = await login(supabase, serviceClient, email, password)
 
   if (result.error) {
     return { error: result.error, email }

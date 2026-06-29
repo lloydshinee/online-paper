@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/service'
 import { getUser } from '@/lib/auth/auth-service'
 
 export type AuthorizeResult =
@@ -9,7 +10,8 @@ export async function authorize(
   roles?: string[],
 ): Promise<AuthorizeResult> {
   const supabase = await createClient()
-  const user = await getUser(supabase)
+  const serviceClient = createServiceClient()
+  const user = await getUser(supabase, serviceClient)
 
   if (!user) {
     return { error: 'Not authenticated' }

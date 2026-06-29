@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/service'
 import { authorize } from '@/lib/auth/authorize'
 import { getUser } from '@/lib/auth/auth-service'
 import {
@@ -90,7 +91,8 @@ export async function archiveClassAction(classId: string) {
   if ('error' in auth) return { error: auth.error }
 
   const supabase = await createClient()
-  const user = await getUser(supabase)
+  const serviceClient = createServiceClient()
+  const user = await getUser(supabase, serviceClient)
 
   const instructorId = user?.role === 'instructor' ? auth.userId : undefined
 
