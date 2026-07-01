@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import type { SubmissionData, SubmissionDetail } from './types'
 import { getLastName } from './types'
 import GradingPanel from './grading-panel'
+import { copyToClipboard } from '@/lib/utils'
 
 interface SubmissionsTabProps {
   assessmentId: string
@@ -79,14 +80,18 @@ export default function SubmissionsTab({ assessmentId }: SubmissionsTabProps) {
     setSubmissionSearch(submissionSearchInput)
   }
 
-  function handleCopyScores() {
+  async function handleCopyScores() {
     const lines = studentGroups.map((g) =>
       g.latestScore != null ? String(g.latestScore) : '-'
     )
     if (lines.length === 0) return
-    navigator.clipboard.writeText(lines.join('\n'))
-    setScoresCopied(true)
-    setTimeout(() => setScoresCopied(false), 2000)
+    const ok = await copyToClipboard(lines.join('\n'))
+    if (ok) {
+      setScoresCopied(true)
+      setTimeout(() => setScoresCopied(false), 2000)
+    } else {
+      toast.error('Copy failed — use a secure context or select and copy manually')
+    }
   }
 
   async function viewSubmission(submissionId: string) {
@@ -160,35 +165,51 @@ export default function SubmissionsTab({ assessmentId }: SubmissionsTabProps) {
               No submissions yet. Student submissions will appear here once the assessment is published.
             </p>
           ) : (
-            <div className="divide-y divide-border -mx-6">
-              {studentGroups.map((g) => (
-                <div key={g.studentId} className="flex items-center justify-between px-6 py-4">
-                  <div>
-                    <p className="text-sm font-medium">{g.studentName}</p>
-                    <p className="text-xs text-muted-foreground">{g.studentEmail}</p>
-                    <div className="flex items-center gap-2 mt-1">
-                      {g.latestScore != null && (
-                        <span className="text-xs text-muted-foreground">{g.latestScore} pts</span>
-                      )}
-                      {g.totalPending > 0 && (
-                        <span className="inline-flex items-center gap-1 rounded-md bg-yellow-100 dark:bg-yellow-900/20 px-1.5 py-0.5 text-xs text-yellow-700 dark:text-yellow-400 font-medium">
-                          <AlertCircle size={10} />
-                          {g.totalPending} pending
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                      {g.attemptCount} attempt{g.attemptCount !== 1 ? 's' : ''}
-                    </span>
-                    <button onClick={() => setViewingStudent(g)}
-                      className="inline-flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-xs hover:bg-muted transition-colors">
-                      <Eye size={12} /> View
-                    </button>
-                  </div>
-                </div>
-              ))}
+            <div className="-mx-6 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border">
+                    <th className="text-left px-6 py-3 text-xs font-medium text-muted-foreground">Student</th>
+                    <th className="text-center px-6 py-3 text-xs font-medium text-muted-foreground">Email</th>
+                    <th className="text-center px-6 py-3 text-xs font-medium text-muted-foreground">Score</th>
+                    <th className="text-center px-6 py-3 text-xs font-medium text-muted-foreground">Attempts</th>
+                    <th className="text-center px-6 py-3 text-xs font-medium text-muted-foreground">Status</th>
+                    <th className="text-right px-6 py-3 text-xs font-medium text-muted-foreground"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {studentGroups.map((g) => (
+                    <tr key={g.studentId} className="border-b border-border last:border-0">
+                      <td className="px-6 py-3 text-foreground">{g.studentName}</td>
+                      <td className="px-6 py-3 text-xs text-muted-foreground text-center">{g.studentEmail}</td>
+                      <td className="px-6 py-3 text-center">
+                        {g.latestScore != null ? (
+                          <span className="text-foreground">{g.latestScore} pts</span>
+                        ) : (
+                          <span className="text-muted-foreground">-</span>
+                        )}
+                      </td>
+                      <td className="px-6 py-3 text-center text-xs text-muted-foreground">{g.attemptCount}</td>
+                      <td className="px-6 py-3 text-center">
+                        {g.totalPending > 0 ? (
+                          <span className="inline-flex items-center gap-1 rounded-md bg-yellow-100 dark:bg-yellow-900/20 px-1.5 py-0.5 text-xs text-yellow-700 dark:text-yellow-400 font-medium">
+                            <AlertCircle size={10} />
+                            {g.totalPending} pending
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">Graded</span>
+                        )}
+                      </td>
+                      <td className="px-6 py-3 text-right">
+                        <button onClick={() => setViewingStudent(g)}
+                          className="inline-flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-xs hover:bg-muted transition-colors">
+                          <Eye size={12} /> View
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
