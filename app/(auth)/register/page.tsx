@@ -31,10 +31,16 @@ export default function RegisterPage() {
 
           <form action={action} className="flex flex-col gap-4">
             <div className="flex flex-col gap-1.5">
-              <label htmlFor="name" className="text-sm font-medium">Name</label>
-              <input id="name" name="name" type="text" required
+              <label htmlFor="firstname" className="text-sm font-medium">First name</label>
+              <input id="firstname" name="firstname" type="text" required
                 className="flex h-10 w-full rounded-lg border border-border bg-transparent px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring transition-colors"
-                placeholder="Your name" />
+                placeholder="First name" />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="lastname" className="text-sm font-medium">Last name</label>
+              <input id="lastname" name="lastname" type="text"
+                className="flex h-10 w-full rounded-lg border border-border bg-transparent px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring transition-colors"
+                placeholder="Last name" />
             </div>
             <div className="flex flex-col gap-1.5">
               <label htmlFor="email" className="text-sm font-medium">Email</label>

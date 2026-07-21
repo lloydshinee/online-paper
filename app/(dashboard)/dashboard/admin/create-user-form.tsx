@@ -26,10 +26,16 @@ export function CreateUserForm({ onCreated, onError }: CreateUserFormProps) {
   return (
     <form action={action} className="flex flex-col gap-4">
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="name" className="text-sm font-medium">Name</label>
-        <input id="name" name="name" type="text" required
+        <label htmlFor="firstname" className="text-sm font-medium">First name</label>
+        <input id="firstname" name="firstname" type="text" required
           className="flex h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
-          placeholder="Full name" />
+          placeholder="First name" />
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="lastname" className="text-sm font-medium">Last name</label>
+        <input id="lastname" name="lastname" type="text"
+          className="flex h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+          placeholder="Last name" />
       </div>
       <div className="flex flex-col gap-1.5">
         <label htmlFor="email" className="text-sm font-medium">Email</label>

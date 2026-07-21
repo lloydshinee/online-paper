@@ -2,6 +2,7 @@ import { requireRole } from '@/lib/auth/require-auth'
 import { getInstructorClasses, getRoster } from '@/app/actions/classes'
 import { getAssessmentsForClass } from '@/app/actions/assessments'
 import DashboardHeader from '@/components/dashboard-header'
+import { StudentRoster } from '@/components/student-roster'
 import { ArrowLeft, ClipboardList, Plus, Users, FileEdit, CheckCircle2, Archive } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import Link from 'next/link'
@@ -28,7 +29,13 @@ export default async function ClassPage({
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <DashboardHeader userName={user.name ?? 'User'} />
+      <DashboardHeader
+        userName={[user.firstname, user.lastname].filter(Boolean).join(' ') || 'User'}
+        userFirstname={user.firstname}
+        userLastname={user.lastname}
+        userEmail={user.email}
+        userAvatarUrl={user.avatar_url}
+      />
 
       <main className="mx-auto max-w-5xl px-6 py-10">
         <div className="mb-8">
@@ -218,34 +225,7 @@ export default async function ClassPage({
               </section>
             )}
 
-            {/* Roster */}
-            <section>
-              <div className="flex items-center gap-2 mb-3">
-                <Users size={15} className="text-muted-foreground" />
-                <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Student Roster</h2>
-                <Badge variant="secondary" className="ml-1">{students.length}</Badge>
-              </div>
-
-              {students.length === 0 ? (
-                <div className="rounded-xl border border-border p-8 text-center">
-                  <p className="text-sm text-muted-foreground">
-                    No students enrolled yet. Share the invite code with your students.
-                  </p>
-                </div>
-              ) : (
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {students.map((s) => (
-                    <div
-                      key={s.id}
-                      className="rounded-lg border border-border bg-card px-4 py-3"
-                    >
-                      <p className="text-sm font-medium">{s.name}</p>
-                      <p className="text-xs text-muted-foreground">{s.email}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
+            <StudentRoster classId={id} initialCount={students.length} />
           </div>
         )}
       </main>

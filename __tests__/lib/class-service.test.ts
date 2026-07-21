@@ -40,7 +40,7 @@ describe('class service', () => {
     const email = `test-createclass-${Date.now()}@example.com`
     testEmails.push(email)
 
-    const { user: instructor } = await createUser(email, 'TestPass123!', 'Test Instructor', 'instructor')
+    const { user: instructor } = await createUser(email, 'TestPass123!', 'Test', 'Instructor', 'instructor')
     expect(instructor).toBeDefined()
 
     const result = await createClass(instructor!.id, 'Math 101')
@@ -71,8 +71,8 @@ describe('class service', () => {
     const studentEmail = `test-join-stu-${Date.now()}@example.com`
     testEmails.push(instructorEmail, studentEmail)
 
-    const { user: instructor } = await createUser(instructorEmail, 'TestPass123!', 'Instructor', 'instructor')
-    const { user: student } = await createUser(studentEmail, 'TestPass123!', 'Student', 'student')
+    const { user: instructor } = await createUser(instructorEmail, 'TestPass123!', 'Test', 'Instructor', 'instructor')
+    const { user: student } = await createUser(studentEmail, 'TestPass123!', 'Test', 'Student', 'student')
     expect(student).toBeDefined()
 
     const { class: cls } = await createClass(instructor!.id, 'Science')
@@ -90,7 +90,7 @@ describe('class service', () => {
     const studentEmail = `test-badcode-${Date.now()}@example.com`
     testEmails.push(studentEmail)
 
-    const { user: student } = await createUser(studentEmail, 'TestPass123!', 'Student', 'student')
+    const { user: student } = await createUser(studentEmail, 'TestPass123!', 'Test', 'Student', 'student')
 
     const result = await joinClass(student!.id, 'NONEXISTENT')
 
@@ -104,8 +104,8 @@ describe('class service', () => {
     const studentEmail = `test-double-stu-${Date.now()}@example.com`
     testEmails.push(instructorEmail, studentEmail)
 
-    const { user: instructor } = await createUser(instructorEmail, 'TestPass123!', 'Instructor', 'instructor')
-    const { user: student } = await createUser(studentEmail, 'TestPass123!', 'Student', 'student')
+    const { user: instructor } = await createUser(instructorEmail, 'TestPass123!', 'Test', 'Instructor', 'instructor')
+    const { user: student } = await createUser(studentEmail, 'TestPass123!', 'Test', 'Student', 'student')
 
     const { class: cls } = await createClass(instructor!.id, 'History')
     testClassIds.push(cls!.id)
@@ -124,8 +124,8 @@ describe('class service', () => {
     const studentEmail = `test-list-stu-${Date.now()}@example.com`
     testEmails.push(instructorEmail, studentEmail)
 
-    const { user: instructor } = await createUser(instructorEmail, 'TestPass123!', 'Instructor', 'instructor')
-    const { user: student } = await createUser(studentEmail, 'TestPass123!', 'Student', 'student')
+    const { user: instructor } = await createUser(instructorEmail, 'TestPass123!', 'Test', 'Instructor', 'instructor')
+    const { user: student } = await createUser(studentEmail, 'TestPass123!', 'Test', 'Student', 'student')
 
     const { class: cls1 } = await createClass(instructor!.id, 'English')
     const { class: cls2 } = await createClass(instructor!.id, 'Physics')
@@ -146,7 +146,7 @@ describe('class service', () => {
     const studentEmail = `test-empty-${Date.now()}@example.com`
     testEmails.push(studentEmail)
 
-    const { user: student } = await createUser(studentEmail, 'TestPass123!', 'Student', 'student')
+    const { user: student } = await createUser(studentEmail, 'TestPass123!', 'Test', 'Student', 'student')
 
     const result = await getStudentClasses(student!.id)
 
@@ -160,9 +160,9 @@ describe('class service', () => {
     const student2Email = `test-roster-stu2-${Date.now()}@example.com`
     testEmails.push(instructorEmail, student1Email, student2Email)
 
-    const { user: instructor } = await createUser(instructorEmail, 'TestPass123!', 'Instructor', 'instructor')
-    const { user: student1 } = await createUser(student1Email, 'TestPass123!', 'Student 1', 'student')
-    const { user: student2 } = await createUser(student2Email, 'TestPass123!', 'Student 2', 'student')
+    const { user: instructor } = await createUser(instructorEmail, 'TestPass123!', 'Test', 'Instructor', 'instructor')
+    const { user: student1 } = await createUser(student1Email, 'TestPass123!', 'Student', '1', 'student')
+    const { user: student2 } = await createUser(student2Email, 'TestPass123!', 'Student', '2', 'student')
 
     const { class: cls } = await createClass(instructor!.id, 'Biology')
     testClassIds.push(cls!.id)
@@ -182,7 +182,7 @@ describe('class service', () => {
     const instructorEmail = `test-archive-instr-${Date.now()}@example.com`
     testEmails.push(instructorEmail)
 
-    const { user: instructor } = await createUser(instructorEmail, 'TestPass123!', 'Instructor', 'instructor')
+    const { user: instructor } = await createUser(instructorEmail, 'TestPass123!', 'Test', 'Instructor', 'instructor')
 
     const { class: cls } = await createClass(instructor!.id, 'Old Course')
     testClassIds.push(cls!.id)

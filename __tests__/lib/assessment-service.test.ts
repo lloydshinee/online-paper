@@ -59,7 +59,7 @@ describe('assessment service', () => {
     const email = `test-assessment-${Date.now()}@example.com`
     testEmails.push(email)
 
-    const { user: instructor } = await createUser(email, 'TestPass123!', 'Instructor', 'instructor')
+    const { user: instructor } = await createUser(email, 'TestPass123!', 'Test', 'Instructor', 'instructor')
     const { class: cls } = await createClass(instructor!.id, 'Test Class')
     testClassIds.push(cls!.id)
 
@@ -84,7 +84,7 @@ describe('assessment service', () => {
     const email = `test-setq-${Date.now()}@example.com`
     testEmails.push(email)
 
-    const { user: instructor } = await createUser(email, 'TestPass123!', 'Instructor', 'instructor')
+    const { user: instructor } = await createUser(email, 'TestPass123!', 'Test', 'Instructor', 'instructor')
     const { class: cls } = await createClass(instructor!.id, 'Q Class')
     testClassIds.push(cls!.id)
 
@@ -106,7 +106,7 @@ describe('assessment service', () => {
     const email = `test-live-${Date.now()}@example.com`
     testEmails.push(email)
 
-    const { user: instructor } = await createUser(email, 'TestPass123!', 'Instructor', 'instructor')
+    const { user: instructor } = await createUser(email, 'TestPass123!', 'Test', 'Instructor', 'instructor')
     const { class: cls } = await createClass(instructor!.id, 'Live Class')
     testClassIds.push(cls!.id)
 
@@ -127,7 +127,7 @@ describe('assessment service', () => {
     const email = `test-publish-${Date.now()}@example.com`
     testEmails.push(email)
 
-    const { user: instructor } = await createUser(email, 'TestPass123!', 'Instructor', 'instructor')
+    const { user: instructor } = await createUser(email, 'TestPass123!', 'Test', 'Instructor', 'instructor')
     const { class: cls } = await createClass(instructor!.id, 'Pub Class')
     testClassIds.push(cls!.id)
 
@@ -162,7 +162,7 @@ describe('assessment service', () => {
     const email = `test-close-${Date.now()}@example.com`
     testEmails.push(email)
 
-    const { user: instructor } = await createUser(email, 'TestPass123!', 'Instructor', 'instructor')
+    const { user: instructor } = await createUser(email, 'TestPass123!', 'Test', 'Instructor', 'instructor')
     const { class: cls } = await createClass(instructor!.id, 'Close Class')
     testClassIds.push(cls!.id)
 
@@ -186,7 +186,7 @@ describe('assessment service', () => {
     const email = `test-delete-${Date.now()}@example.com`
     testEmails.push(email)
 
-    const { user: instructor } = await createUser(email, 'TestPass123!', 'Instructor', 'instructor')
+    const { user: instructor } = await createUser(email, 'TestPass123!', 'Test', 'Instructor', 'instructor')
     const { class: cls } = await createClass(instructor!.id, 'Delete Class')
     testClassIds.push(cls!.id)
 
@@ -220,7 +220,7 @@ describe('assessment service', () => {
     const email = `test-delpub-${Date.now()}@example.com`
     testEmails.push(email)
 
-    const { user: instructor } = await createUser(email, 'TestPass123!', 'Instructor', 'instructor')
+    const { user: instructor } = await createUser(email, 'TestPass123!', 'Test', 'Instructor', 'instructor')
     const { class: cls } = await createClass(instructor!.id, 'Delete Pub Class')
 
     const { assessment } = await createAssessment(
@@ -242,7 +242,7 @@ describe('assessment service', () => {
     const email = `test-listassess-${Date.now()}@example.com`
     testEmails.push(email)
 
-    const { user: instructor } = await createUser(email, 'TestPass123!', 'Instructor', 'instructor')
+    const { user: instructor } = await createUser(email, 'TestPass123!', 'Test', 'Instructor', 'instructor')
     const { class: cls } = await createClass(instructor!.id, 'List Class')
     testClassIds.push(cls!.id)
 

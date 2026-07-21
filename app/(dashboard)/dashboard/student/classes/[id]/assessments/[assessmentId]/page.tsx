@@ -778,7 +778,7 @@ export default function TakeAssessmentPage({
           <button
             onClick={() => setCurrentIndex((i) => Math.max(0, i - 1))}
             disabled={currentIndex === 0}
-            className="inline-flex items-center gap-1 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            className="inline-flex items-center gap-1 rounded-md border border-border px-3 py-2.5 sm:py-2 text-sm hover:bg-muted transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
           >
             <ChevronLeft size={14} />
             Previous
@@ -788,7 +788,7 @@ export default function TakeAssessmentPage({
             {currentIndex < totalQuestions - 1 ? (
               <button
                 onClick={() => setCurrentIndex((i) => Math.min(totalQuestions - 1, i + 1))}
-                className="inline-flex items-center gap-1 rounded-md border border-border px-3 py-2 text-sm hover:bg-muted transition-colors"
+                className="inline-flex items-center gap-1 rounded-md border border-border px-3 py-2.5 sm:py-2 text-sm hover:bg-muted transition-colors"
               >
                 Next
                 <ChevronRight size={14} />
@@ -796,7 +796,7 @@ export default function TakeAssessmentPage({
             ) : (
               <button
                 onClick={() => setShowConfirm(true)}
-                className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+                className="rounded-md bg-primary px-4 py-2.5 sm:py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
               >
                 Submit Assessment
               </button>
@@ -856,11 +856,11 @@ function MCQuestion({
         {options.map((opt, idx) => (
           <label
             key={idx}
-            className={`flex items-center gap-3 rounded-md border px-4 py-3 cursor-pointer transition-colors ${
-              selectedIndex === idx
-                ? 'border-primary bg-primary/5'
-                : 'border-border hover:bg-muted/50'
-            }`}
+              className={`flex items-center gap-3 rounded-md border px-4 py-3.5 cursor-pointer transition-colors ${
+               selectedIndex === idx
+                 ? 'border-primary bg-primary/5'
+                 : 'border-border hover:bg-muted/50'
+             }`}
           >
             <input
               type="radio"
@@ -896,11 +896,11 @@ function TFQuestion({
         {[true, false].map((val) => (
           <label
             key={String(val)}
-            className={`flex-1 flex items-center justify-center gap-2 rounded-md border px-4 py-3 cursor-pointer transition-colors ${
-              selectedValue === val
-                ? 'border-primary bg-primary/5'
-                : 'border-border hover:bg-muted/50'
-            }`}
+             className={`flex-1 flex items-center justify-center gap-2 rounded-md border px-4 py-3.5 cursor-pointer transition-colors ${
+               selectedValue === val
+                 ? 'border-primary bg-primary/5'
+                 : 'border-border hover:bg-muted/50'
+             }`}
           >
             <input
               type="radio"
@@ -926,10 +926,10 @@ function FillQuestion({
   value: string | undefined
   onChange: (text: string) => void
 }) {
-  const stem = (content.stem as string).replace('______', '')
+  const parts = (content.stem as string).split('______')
   return (
     <div>
-      <p className="text-base mb-4">{stem}
+      <p className="text-base mb-4">{parts[0]}
         <span className="inline-flex mx-1">
           <input
             type="text"
@@ -939,7 +939,7 @@ function FillQuestion({
             placeholder="answer"
           />
         </span>
-        .
+        {parts[1]}
       </p>
     </div>
   )

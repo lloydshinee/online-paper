@@ -41,7 +41,7 @@ async function setupWithStudents(studentCount: number) {
   const instructorEmail = `test-ns-instr-${Date.now()}@example.com`
   testEmails.push(instructorEmail)
 
-  const { user: instructor } = await createUser(instructorEmail, 'TestPass123!', 'NS Instructor', 'instructor')
+  const { user: instructor } = await createUser(instructorEmail, 'TestPass123!', 'NS', 'Instructor', 'instructor')
   if (!instructor) throw new Error('Failed to create instructor')
 
   const { class: cls } = await createClass(instructor.id, 'NS Class')
@@ -51,7 +51,7 @@ async function setupWithStudents(studentCount: number) {
   for (let i = 0; i < studentCount; i++) {
     const email = `test-ns-stu${i}-${Date.now()}@example.com`
     testEmails.push(email)
-    const { user: student } = await createUser(email, 'TestPass123!', `NS Student ${i}`, 'instructor')
+    const { user: student } = await createUser(email, 'TestPass123!', 'NS', `Student ${i}`, 'instructor')
     if (!student) throw new Error(`Failed to create student ${i}`)
     await joinClass(student.id, cls.join_code)
     studentIds.push(student.id)

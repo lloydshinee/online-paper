@@ -35,6 +35,10 @@ export default function AdminClassPage({
 
   const [className, setClassName] = useState('')
   const [userName, setUserName] = useState('')
+  const [userFirstname, setUserFirstname] = useState<string | null>(null)
+  const [userLastname, setUserLastname] = useState<string | null>(null)
+  const [userEmail, setUserEmail] = useState('')
+  const [userAvatarUrl, setUserAvatarUrl] = useState<string | null>(null)
   const [assessments, setAssessments] = useState<AssessmentData[]>([])
   const [selectedAssessment, setSelectedAssessment] = useState<string | null>(null)
   const [students, setStudents] = useState<StudentData[]>([])
@@ -48,7 +52,12 @@ export default function AdminClassPage({
   useEffect(() => {
     getUsers(1, 0).then((r) => {
       if ('users' in r && r.users.length > 0) {
-        setUserName(r.users[0].name ?? '')
+        const admin = r.users[0]
+        setUserName([admin.firstname, admin.lastname].filter(Boolean).join(' ') || '')
+        setUserFirstname(admin.firstname)
+        setUserLastname(admin.lastname)
+        setUserEmail(admin.email)
+        setUserAvatarUrl(admin.avatar_url ?? null)
       }
     })
     getAdminClassAssessments(classId).then((r) => {
@@ -102,7 +111,13 @@ export default function AdminClassPage({
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <DashboardHeader userName={userName} />
+      <DashboardHeader
+        userName={userName}
+        userFirstname={userFirstname}
+        userLastname={userLastname}
+        userEmail={userEmail}
+        userAvatarUrl={userAvatarUrl}
+      />
 
       <main className="mx-auto max-w-5xl px-6 py-10">
         <Link href="/dashboard/admin"

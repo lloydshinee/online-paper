@@ -9,7 +9,8 @@ interface AdminResult {
 export async function createUser(
   email: string,
   password: string,
-  name: string,
+  firstname: string,
+  lastname: string | null,
   role: 'admin' | 'instructor' | 'student',
 ): Promise<AdminResult> {
   const supabase = createServiceClient()
@@ -18,7 +19,7 @@ export async function createUser(
     email,
     password,
     email_confirm: true,
-    user_metadata: { role, name },
+    user_metadata: { role, firstname, lastname },
   })
 
   if (error || !data.user) {
@@ -27,7 +28,7 @@ export async function createUser(
 
   const { error: updateError } = await supabase
     .from('users')
-    .update({ role, name })
+    .update({ firstname, lastname, role })
     .eq('id', data.user.id)
 
   if (updateError) {
@@ -38,7 +39,8 @@ export async function createUser(
     user: {
       id: data.user.id,
       email: data.user.email!,
-      name,
+      firstname,
+      lastname,
       role,
     },
     error: null,
@@ -73,7 +75,7 @@ export async function resetPassword(
 
   return {
     user: data.user
-      ? { id: data.user.id, email: data.user.email!, name: '', role: 'student' }
+      ? { id: data.user.id, email: data.user.email!, firstname: '', lastname: null, role: 'student' }
       : null,
     error: null,
   }
@@ -92,19 +94,19 @@ export async function listUsers(
 
   let query = supabase.from('users').select('*', { count: 'exact', head: true })
   if (search) {
-    query = query.or(`name.ilike.%${search}%,email.ilike.%${search}%`)
+    query = query.or(`firstname.ilike.%${search}%,lastname.ilike.%${search}%,email.ilike.%${search}%`)
   }
 
   const { count } = await query
 
   let dataQuery = supabase
     .from('users')
-    .select('id, email, name, role, created_at')
+    .select('id, email, firstname, lastname, role, avatar_url, created_at')
     .order('created_at', { ascending: false })
     .range(offset, offset + limit - 1)
 
   if (search) {
-    dataQuery = dataQuery.or(`name.ilike.%${search}%,email.ilike.%${search}%`)
+    dataQuery = dataQuery.or(`firstname.ilike.%${search}%,lastname.ilike.%${search}%,email.ilike.%${search}%`)
   }
 
   const { data, error } = await dataQuery

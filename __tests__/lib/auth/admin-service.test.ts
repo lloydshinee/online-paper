@@ -34,12 +34,13 @@ describe('admin service', () => {
     testEmails.push(email)
     const password = 'TempPass123!'
 
-    const result = await createUser(email, password, 'Test Instructor', 'instructor')
+    const result = await createUser(email, password, 'Test', 'Instructor', 'instructor')
 
     expect(result.error).toBeNull()
     expect(result.user).toBeDefined()
     expect(result.user!.email).toBe(email)
-    expect(result.user!.name).toBe('Test Instructor')
+    expect(result.user!.firstname).toBe('Test')
+    expect(result.user!.lastname).toBe('Instructor')
     expect(result.user!.role).toBe('instructor')
 
     const { data: profile } = await adminClient
@@ -56,7 +57,7 @@ describe('admin service', () => {
     testEmails.push(email)
     const password = 'AdminPass123!'
 
-    const result = await createUser(email, password, 'Test Admin', 'admin')
+    const result = await createUser(email, password, 'Test', 'Admin', 'admin')
 
     expect(result.error).toBeNull()
     expect(result.user!.role).toBe('admin')
@@ -67,7 +68,7 @@ describe('admin service', () => {
     testEmails.push(email)
     const password = 'TempPass123!'
 
-    const { user } = await createUser(email, password, 'Test User', 'instructor')
+    const { user } = await createUser(email, password, 'Test', 'User', 'instructor')
     expect(user).toBeDefined()
 
     const result = await deactivateUser(user!.id)
@@ -84,7 +85,7 @@ describe('admin service', () => {
     const oldPassword = 'OldPass123!'
     const newPassword = 'NewPass456!'
 
-    const { user } = await createUser(email, oldPassword, 'Test User', 'instructor')
+    const { user } = await createUser(email, oldPassword, 'Test', 'User', 'instructor')
     expect(user).toBeDefined()
 
     const result = await resetPassword(user!.id, newPassword)

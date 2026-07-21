@@ -31,7 +31,13 @@ export default async function StudentClassPage({
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <DashboardHeader userName={user.name ?? 'User'}>
+      <DashboardHeader
+        userName={[user.firstname, user.lastname].filter(Boolean).join(' ') || 'User'}
+        userFirstname={user.firstname}
+        userLastname={user.lastname}
+        userEmail={user.email}
+        userAvatarUrl={user.avatar_url}
+      >
         <NotificationBell />
       </DashboardHeader>
 

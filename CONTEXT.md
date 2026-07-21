@@ -134,6 +134,11 @@ Instructors create questions by pasting a block of formatted plain text. The tex
 - There is no "forgot password" flow. Account recovery is handled by the admin.
 - Instructors and admins are created by the admin.
 
+## Profile
+
+**Profile**:
+A modal dialog available to all roles where a user updates their first name, last name, and avatar. Triggered by clicking the user's name in the DashboardHeader.
+
 ## Constraints
 
 - Each class has exactly one instructor.

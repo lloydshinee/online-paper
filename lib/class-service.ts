@@ -38,7 +38,8 @@ export interface MembershipResult {
 export interface StudentProfile {
   id: string
   email: string
-  name: string
+  firstname: string | null
+  lastname: string | null
 }
 
 export async function createClass(
@@ -191,7 +192,7 @@ export async function getClassRoster(
 
   const { data: students, error: studentError } = await supabase
     .from('users')
-    .select('id, email, name')
+    .select('id, email, firstname, lastname')
     .in('id', studentIds)
 
   if (studentError) {
@@ -199,6 +200,112 @@ export async function getClassRoster(
   }
 
   return { students: (students as StudentProfile[]) ?? [], error: null }
+}
+
+export async function getClassRosterPaginated(
+  instructorId: string,
+  classId: string,
+  page = 1,
+  pageSize = 20,
+  search?: string,
+): Promise<{ students: StudentProfile[]; total: number; error: string | null }> {
+  const supabase = createServiceClient()
+
+  const { data: cls } = await supabase
+    .from('classes')
+    .select('id')
+    .eq('id', classId)
+    .eq('instructor_id', instructorId)
+    .single()
+
+  if (!cls) {
+    return { students: [], total: 0, error: 'Class not found' }
+  }
+
+  // Get total count
+  let countQuery = supabase
+    .from('class_enrollments')
+    .select('*', { count: 'exact', head: true })
+    .eq('class_id', classId)
+
+  if (search) {
+    const { data: matchingUsers } = await supabase
+      .from('users')
+      .select('id')
+      .or(`firstname.ilike.%${search}%,lastname.ilike.%${search}%,email.ilike.%${search}%`)
+
+    const matchingIds = (matchingUsers ?? []).map((u) => u.id)
+    if (matchingIds.length === 0) return { students: [], total: 0, error: null }
+    countQuery = countQuery.in('student_id', matchingIds)
+  }
+
+  const { count } = await countQuery
+
+  // Get student IDs with pagination
+  let enrollQuery = supabase
+    .from('class_enrollments')
+    .select('student_id')
+    .eq('class_id', classId)
+    .range((page - 1) * pageSize, page * pageSize - 1)
+
+  if (search) {
+    const { data: matchingUsers } = await supabase
+      .from('users')
+      .select('id')
+      .or(`firstname.ilike.%${search}%,lastname.ilike.%${search}%,email.ilike.%${search}%`)
+
+    const matchingIds = (matchingUsers ?? []).map((u) => u.id)
+    if (matchingIds.length === 0) return { students: [], total: 0, error: null }
+    enrollQuery = enrollQuery.in('student_id', matchingIds)
+  }
+
+  const { data: enrollments } = await enrollQuery
+
+  if (!enrollments || enrollments.length === 0) {
+    return { students: [], total: count ?? 0, error: null }
+  }
+
+  const studentIds = enrollments.map((e) => e.student_id)
+
+  const { data: students, error: studentError } = await supabase
+    .from('users')
+    .select('id, email, firstname, lastname')
+    .in('id', studentIds)
+
+  if (studentError) {
+    return { students: [], total: 0, error: studentError.message }
+  }
+
+  return { students: (students as StudentProfile[]) ?? [], total: count ?? 0, error: null }
+}
+
+export async function removeStudentFromClass(
+  instructorId: string,
+  classId: string,
+  studentId: string,
+): Promise<{ error: string | null }> {
+  const supabase = createServiceClient()
+
+  const { data: cls } = await supabase
+    .from('classes')
+    .select('id')
+    .eq('id', classId)
+    .eq('instructor_id', instructorId)
+    .single()
+
+  if (!cls) {
+    return { error: 'Class not found' }
+  }
+
+  const { error } = await supabase
+    .from('class_enrollments')
+    .delete()
+    .eq('class_id', classId)
+    .eq('student_id', studentId)
+
+  if (error) return { error: error.message }
+
+  return { error: null }
 }
 
 export async function getInstructorClasses(

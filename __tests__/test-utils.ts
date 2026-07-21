@@ -38,7 +38,7 @@ export async function createTestUser(role: 'admin' | 'instructor' | 'student'): 
       email,
       password,
       email_confirm: true,
-      user_metadata: { role: 'student', name: 'Test Student' },
+      user_metadata: { role: 'student', firstname: 'Test', lastname: 'Student' },
     })
     if (error || !data.user) throw new Error(error?.message ?? 'Failed to create student')
     const userId = data.user.id
@@ -46,7 +46,7 @@ export async function createTestUser(role: 'admin' | 'instructor' | 'student'): 
     return { id: userId, email, password, role: 'student' }
   }
 
-  const { user, error } = await createUser(email, password, `Test ${role}`, role)
+  const { user, error } = await createUser(email, password, 'Test', role === 'admin' ? 'Admin' : 'Instructor', role)
   if (error || !user) throw new Error(error ?? 'Failed to create user')
   testUserIds.push(user.id)
   return { id: user.id, email, password, role }

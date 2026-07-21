@@ -19,7 +19,13 @@ export default async function StudentDashboard() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <DashboardHeader userName={user.name ?? 'User'}>
+      <DashboardHeader
+        userName={[user.firstname, user.lastname].filter(Boolean).join(' ') || 'User'}
+        userFirstname={user.firstname}
+        userLastname={user.lastname}
+        userEmail={user.email}
+        userAvatarUrl={user.avatar_url}
+      >
         <NotificationBell />
       </DashboardHeader>
 
@@ -76,7 +82,7 @@ export default async function StudentDashboard() {
               </p>
             </div>
           ) : (
-            <div className="grid gap-3 grid-cols-2">
+            <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
               {pending.map((a) => {
                 const isInProgress = a.submission?.status === 'in_progress'
                 const isLive = a.mode === 'live' && a.state === 'active'

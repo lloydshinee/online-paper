@@ -12,7 +12,13 @@ export default async function InstructorDashboard() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <DashboardHeader userName={user.name ?? 'User'} />
+      <DashboardHeader
+        userName={[user.firstname, user.lastname].filter(Boolean).join(' ') || 'User'}
+        userFirstname={user.firstname}
+        userLastname={user.lastname}
+        userEmail={user.email}
+        userAvatarUrl={user.avatar_url}
+      />
 
       <main className="mx-auto max-w-5xl px-6 py-10">
         <div className="mb-8 flex items-center justify-between">

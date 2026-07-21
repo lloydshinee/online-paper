@@ -3,8 +3,10 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 export interface UserProfile {
   id: string
   email: string
-  name: string | null
+  firstname: string | null
+  lastname: string | null
   role: 'admin' | 'instructor' | 'student'
+  avatar_url?: string | null
   created_at?: string
 }
 
@@ -27,7 +29,7 @@ async function fetchProfile(
 ): Promise<UserProfile | null> {
   const { data: profile } = await serviceClient
     .from('users')
-    .select('id, email, name, role')
+    .select('id, email, firstname, lastname, role, avatar_url')
     .eq('id', userId)
     .single()
 
@@ -39,12 +41,13 @@ export async function register(
   serviceClient: SupabaseClient,
   email: string,
   password: string,
-  name: string,
+  firstname: string,
+  lastname: string | null,
 ): Promise<AuthResult> {
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
-    options: { data: { name } },
+    options: { data: { firstname, lastname } },
   })
 
   if (error || !data.user) {

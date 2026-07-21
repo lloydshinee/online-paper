@@ -437,7 +437,7 @@ export async function getSubmissionsForAssessment(
   const studentIds = submissions.map((s) => s.student_id)
   const { data: students } = await supabase
     .from('users')
-    .select('id, name, email')
+    .select('id, firstname, lastname, email')
     .in('id', studentIds)
 
   const studentMap = new Map((students ?? []).map((s) => [s.id, s]))
@@ -493,7 +493,11 @@ export async function getSubmissionsForAssessment(
   return {
     submissions: submissions.map((s) => ({
       ...(s as SubmissionData),
-      student_name: studentMap.get(s.student_id)?.name ?? 'Unknown',
+      student_name: (() => {
+        const st = studentMap.get(s.student_id)
+        if (!st) return 'Unknown'
+        return [st.firstname, st.lastname].filter(Boolean).join(' ') || 'Unknown'
+      })(),
       student_email: studentMap.get(s.student_id)?.email ?? 'Unknown',
       pending_count: pendingBySubmission.get(s.id) ?? 0,
     })),

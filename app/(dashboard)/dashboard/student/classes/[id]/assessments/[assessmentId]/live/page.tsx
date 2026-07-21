@@ -438,11 +438,11 @@ function MCQuestion({
         {options.map((opt, idx) => (
           <label
             key={idx}
-            className={`flex items-center gap-3 rounded-md border px-4 py-3 cursor-pointer transition-colors ${
-              selectedIndex === idx
-                ? 'border-primary bg-primary/5'
-                : 'border-border hover:bg-muted/50'
-            }`}
+              className={`flex items-center gap-3 rounded-md border px-4 py-3.5 cursor-pointer transition-colors ${
+               selectedIndex === idx
+                 ? 'border-primary bg-primary/5'
+                 : 'border-border hover:bg-muted/50'
+             }`}
           >
             <input
               type="radio"
@@ -478,11 +478,11 @@ function TFQuestion({
         {[true, false].map((val) => (
           <label
             key={String(val)}
-            className={`flex-1 flex items-center justify-center gap-2 rounded-md border px-4 py-3 cursor-pointer transition-colors ${
-              selectedValue === val
-                ? 'border-primary bg-primary/5'
-                : 'border-border hover:bg-muted/50'
-            }`}
+             className={`flex-1 flex items-center justify-center gap-2 rounded-md border px-4 py-3.5 cursor-pointer transition-colors ${
+               selectedValue === val
+                 ? 'border-primary bg-primary/5'
+                 : 'border-border hover:bg-muted/50'
+             }`}
           >
             <input
               type="radio"
@@ -508,10 +508,10 @@ function FillQuestion({
   value: string | undefined
   onChange: (text: string) => void
 }) {
-  const stem = (content.stem as string).replace('______', '')
+  const parts = (content.stem as string).split('______')
   return (
     <div>
-      <p className="text-base mb-4">{stem}
+      <p className="text-base mb-4">{parts[0]}
         <span className="inline-flex mx-1">
           <input
             type="text"
@@ -521,7 +521,7 @@ function FillQuestion({
             placeholder="answer"
           />
         </span>
-        .
+        {parts[1]}
       </p>
     </div>
   )

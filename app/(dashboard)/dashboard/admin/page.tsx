@@ -42,6 +42,10 @@ export default function AdminDashboard() {
   const [overviewSearch, setOverviewSearch] = useState('')
   const [loadingOverview, setLoadingOverview] = useState(false)
   const [userName, setUserName] = useState('')
+  const [userFirstname, setUserFirstname] = useState<string | null>(null)
+  const [userLastname, setUserLastname] = useState<string | null>(null)
+  const [userEmail, setUserEmail] = useState('')
+  const [userAvatarUrl, setUserAvatarUrl] = useState<string | null>(null)
 
   const loadUsers = useCallback(async (page: number, search: string) => {
     const offset = (page - 1) * PAGE_SIZE
@@ -51,7 +55,13 @@ export default function AdminDashboard() {
     if (page === 1) {
       const r0 = await getUsers(1, 0)
       const found = r0.users.find((u) => u.role === 'admin')
-      if (found) setUserName(found.name ?? 'Admin')
+      if (found) {
+        setUserName([found.firstname, found.lastname].filter(Boolean).join(' ') || 'Admin')
+        setUserFirstname(found.firstname)
+        setUserLastname(found.lastname)
+        setUserEmail(found.email)
+        setUserAvatarUrl(found.avatar_url ?? null)
+      }
     }
   }, [])
 
@@ -106,7 +116,13 @@ export default function AdminDashboard() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <DashboardHeader userName={userName} />
+      <DashboardHeader
+        userName={userName}
+        userFirstname={userFirstname}
+        userLastname={userLastname}
+        userEmail={userEmail}
+        userAvatarUrl={userAvatarUrl}
+      />
 
       <main className="mx-auto max-w-5xl px-6 py-10">
         <div className="mb-8 flex items-center justify-between">

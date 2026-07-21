@@ -56,7 +56,7 @@ export function UserTable({ users, onUserDeactivated }: { users: UserProfile[]; 
       <TableBody>
         {users.map((u) => (
           <TableRow key={u.id}>
-            <TableCell className="font-medium">{u.name}</TableCell>
+            <TableCell className="font-medium">{[u.firstname, u.lastname].filter(Boolean).join(' ') || '—'}</TableCell>
             <TableCell>{u.email}</TableCell>
             <TableCell>
               <Badge variant={u.role === 'admin' ? 'default' : u.role === 'instructor' ? 'secondary' : 'outline'}>
@@ -68,7 +68,7 @@ export function UserTable({ users, onUserDeactivated }: { users: UserProfile[]; 
                 <ResetPasswordDialog
                   userId={u.id}
                   email={u.email}
-                  name={u.name ?? ''}
+                  name={[u.firstname, u.lastname].filter(Boolean).join(' ') || ''}
                 />
                 <AlertDialog>
                   <AlertDialogTrigger render={

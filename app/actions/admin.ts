@@ -24,14 +24,15 @@ export async function createUserAction(
 
   const email = formData.get('email') as string
   const password = formData.get('password') as string
-  const name = formData.get('name') as string
+  const firstname = formData.get('firstname') as string
+  const lastname = formData.get('lastname') as string
   const role = formData.get('role') as 'admin' | 'instructor'
 
-  if (!email || !password || !name || !role) {
+  if (!email || !password || !firstname || !role) {
     return { error: 'All fields are required' }
   }
 
-  const result = await createUser(email, password, name, role)
+  const result = await createUser(email, password, firstname, lastname || null, role)
 
   if (result.error) {
     return { error: result.error }
@@ -45,13 +46,18 @@ export async function deactivateUserAction(userId: string) {
   const auth = await authorize(['admin'])
   if ('error' in auth) return { error: auth.error }
 
-  const { error } = await deactivateUser(userId)
+  try {
+    const { error } = await deactivateUser(userId)
 
-  if (error) {
-    return { error }
+    if (error) {
+      return { error }
+    }
+
+    revalidatePath('/dashboard/admin')
+    return { success: 'User deactivated' }
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : 'Failed to deactivate user' }
   }
-
-  revalidatePath('/dashboard/admin')
 }
 
 export async function resetPasswordAction(
@@ -203,7 +209,7 @@ export async function getAdminClassStudents(
     const { data: matchingUsers } = await supabase
       .from('users')
       .select('id')
-      .or(`name.ilike.%${search}%,email.ilike.%${search}%`)
+      .or(`firstname.ilike.%${search}%,lastname.ilike.%${search}%,email.ilike.%${search}%`)
 
     const matchingIds = (matchingUsers ?? []).map((u) => u.id)
     if (matchingIds.length === 0) return { students: [], total: 0 }
@@ -222,7 +228,7 @@ export async function getAdminClassStudents(
     const { data: matchingUsers } = await supabase
       .from('users')
       .select('id')
-      .or(`name.ilike.%${search}%,email.ilike.%${search}%`)
+      .or(`firstname.ilike.%${search}%,lastname.ilike.%${search}%,email.ilike.%${search}%`)
 
     const matchingIds = (matchingUsers ?? []).map((u) => u.id)
     if (matchingIds.length === 0) return { students: [], total: 0 }
@@ -236,7 +242,7 @@ export async function getAdminClassStudents(
   const studentIds = enrollments.map((e) => e.student_id)
 
   const [usersRes, submissionsRes] = await Promise.all([
-    supabase.from('users').select('id, name, email').in('id', studentIds),
+    supabase.from('users').select('id, firstname, lastname, email').in('id', studentIds),
     supabase.from('submissions').select('student_id, status, score_total')
       .eq('assessment_id', assessmentId)
       .in('student_id', studentIds),
@@ -247,9 +253,9 @@ export async function getAdminClassStudents(
     subMap.set(s.student_id, { status: s.status, score_total: s.score_total })
   }
 
-  const students = ((usersRes.data ?? []) as Array<{ id: string; name: string | null; email: string | null }>).map((u) => ({
+  const students = ((usersRes.data ?? []) as Array<{ id: string; firstname: string | null; lastname: string | null; email: string | null }>).map((u) => ({
     id: u.id,
-    name: u.name ?? 'Unknown',
+    name: [u.firstname, u.lastname].filter(Boolean).join(' ') || 'Unknown',
     email: u.email ?? '',
     submission_status: subMap.get(u.id)?.status ?? null,
     score_total: subMap.get(u.id)?.score_total ?? null,

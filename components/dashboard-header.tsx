@@ -1,12 +1,21 @@
 import Link from 'next/link'
 import { Lightbulb } from 'lucide-react'
 import { logoutAction } from '@/app/actions/auth'
+import { ProfileDialog } from '@/components/profile-dialog'
 
 export default function DashboardHeader({
   userName,
+  userFirstname,
+  userLastname,
+  userEmail,
+  userAvatarUrl,
   children,
 }: {
   userName: string
+  userFirstname?: string | null
+  userLastname?: string | null
+  userEmail?: string
+  userAvatarUrl?: string | null
   children?: React.ReactNode
 }) {
   return (
@@ -18,12 +27,19 @@ export default function DashboardHeader({
           </div>
           Online Paper
         </Link>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 min-w-0">
           {children}
-          <span className="text-sm text-muted-foreground">{userName}</span>
-          <form action={logoutAction}>
-            <button className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted transition-colors">
-              Sign out
+          <ProfileDialog
+            userName={userName}
+            firstname={userFirstname ?? null}
+            lastname={userLastname ?? null}
+            email={userEmail ?? ''}
+            avatarUrl={userAvatarUrl ?? null}
+          />
+          <form action={logoutAction} className="shrink-0">
+            <button className="rounded-md border border-border px-2 sm:px-3 py-1.5 text-sm hover:bg-muted transition-colors">
+              <span className="hidden sm:inline">Sign out</span>
+              <span className="sm:hidden" aria-label="Sign out">Exit</span>
             </button>
           </form>
         </div>

@@ -10,6 +10,8 @@ import {
   joinClass,
   getStudentClasses,
   getClassRoster,
+  getClassRosterPaginated,
+  removeStudentFromClass,
   archiveClass,
   getInstructorClasses as getInstructorClassesService,
 } from '@/lib/class-service'
@@ -104,4 +106,29 @@ export async function archiveClassAction(classId: string) {
 
   revalidatePath('/dashboard/instructor')
   revalidatePath('/dashboard/admin')
+}
+
+export async function getRosterAction(
+  classId: string,
+  page = 1,
+  pageSize = 20,
+  search?: string,
+) {
+  const auth = await authorize(['instructor'])
+  if ('error' in auth) return { students: [], total: 0, error: auth.error }
+
+  return getClassRosterPaginated(auth.userId, classId, page, pageSize, search)
+}
+
+export async function removeStudentAction(classId: string, studentId: string) {
+  const auth = await authorize(['instructor'])
+  if ('error' in auth) return { error: auth.error }
+
+  const result = await removeStudentFromClass(auth.userId, classId, studentId)
+
+  if (!result.error) {
+    revalidatePath(`/dashboard/instructor/classes/${classId}`)
+  }
+
+  return result
 }

@@ -14,6 +14,11 @@ const jetbrainsMono = JetBrains_Mono({
   subsets: ['latin'],
 })
 
+export const viewport = {
+  width: 'device-width',
+  initialScale: 1,
+}
+
 export const metadata: Metadata = {
   title: 'Online Paper',
   description: 'Online assessment platform',

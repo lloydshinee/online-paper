@@ -32,12 +32,13 @@ describe('auth service', () => {
     testEmails.push(email)
     const password = 'TestPass123!'
 
-    const result = await register(makeClient(), adminClient, email, password, 'Test Student')
+    const result = await register(makeClient(), adminClient, email, password, 'Test', 'Student')
 
     expect(result.error).toBeNull()
     expect(result.user).toBeDefined()
     expect(result.user!.email).toBe(email)
-    expect(result.user!.name).toBe('Test Student')
+    expect(result.user!.firstname).toBe('Test')
+    expect(result.user!.lastname).toBe('Student')
     expect(result.user!.role).toBe('student')
   })
 
@@ -46,8 +47,8 @@ describe('auth service', () => {
     testEmails.push(email)
     const password = 'TestPass123!'
 
-    await register(makeClient(), adminClient, email, password, 'Test Student')
-    const result = await register(makeClient(), adminClient, email, password, 'Test Student')
+    await register(makeClient(), adminClient, email, password, 'Test', 'Student')
+    const result = await register(makeClient(), adminClient, email, password, 'Test', 'Student')
 
     expect(result.error).toBeDefined()
     expect(result.user).toBeNull()
@@ -58,7 +59,7 @@ describe('auth service', () => {
     testEmails.push(email)
     const password = 'TestPass123!'
 
-    await register(makeClient(), adminClient, email, password, 'Test Student')
+    await register(makeClient(), adminClient, email, password, 'Test', 'Student')
 
     const client = makeClient()
     const result = await login(client, adminClient, email, password)
@@ -73,7 +74,7 @@ describe('auth service', () => {
     const email = `test-badlogin-${Date.now()}@example.com`
     testEmails.push(email)
 
-    await register(makeClient(), adminClient, email, 'TestPass123!', 'Test Student')
+    await register(makeClient(), adminClient, email, 'TestPass123!', 'Test', 'Student')
 
     const result = await login(makeClient(), adminClient, email, 'WrongPassword!')
 
@@ -91,7 +92,7 @@ describe('auth service', () => {
     testEmails.push(email)
     const password = 'TestPass123!'
 
-    await register(makeClient(), adminClient, email, password, 'Test Student')
+    await register(makeClient(), adminClient, email, password, 'Test', 'Student')
 
     const client = makeClient()
     await login(client, adminClient, email, password)
@@ -106,7 +107,7 @@ describe('auth service', () => {
     testEmails.push(email)
     const password = 'TestPass123!'
 
-    await register(makeClient(), adminClient, email, password, 'Test Student')
+    await register(makeClient(), adminClient, email, password, 'Test', 'Student')
 
     const client = makeClient()
     await login(client, adminClient, email, password)

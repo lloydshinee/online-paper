@@ -14,11 +14,12 @@ export async function registerAction(
   prevState: AuthFormState | null | undefined,
   formData: FormData,
 ): Promise<AuthFormState | undefined> {
-  const name = formData.get('name') as string
+  const firstname = formData.get('firstname') as string
+  const lastname = formData.get('lastname') as string
   const email = formData.get('email') as string
   const password = formData.get('password') as string
 
-  if (!name || !email || !password) {
+  if (!firstname || !email || !password) {
     return { error: 'All fields are required', email }
   }
 
@@ -28,7 +29,7 @@ export async function registerAction(
 
   const supabase = await createClient()
   const serviceClient = createServiceClient()
-  const result = await register(supabase, serviceClient, email, password, name)
+  const result = await register(supabase, serviceClient, email, password, firstname, lastname || null)
 
   if (result.error) {
     return { error: result.error, email }

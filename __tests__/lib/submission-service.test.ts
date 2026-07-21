@@ -58,8 +58,8 @@ async function setupAssessment() {
   const studentEmail = `test-sub-stu-${Date.now()}@example.com`
   testEmails.push(instructorEmail, studentEmail)
 
-  const { user: instructor } = await createUser(instructorEmail, 'TestPass123!', 'Instructor', 'instructor')
-  const { user: student } = await createUser(studentEmail, 'TestPass123!', 'Student', 'student')
+  const { user: instructor } = await createUser(instructorEmail, 'TestPass123!', 'Test', 'Instructor', 'instructor')
+  const { user: student } = await createUser(studentEmail, 'TestPass123!', 'Test', 'Student', 'student')
   const { class: cls } = await createClass(instructor!.id, 'Sub Class')
   await joinClass(student!.id, cls!.join_code)
 
