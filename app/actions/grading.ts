@@ -26,6 +26,9 @@ export async function getSubmissionDetail(submissionId: string) {
   const auth = await authorize(['instructor'])
   if ('error' in auth) return null
 
+  const authorized = await verifySubmissionOwnership(auth.userId, submissionId)
+  if (!authorized) return null
+
   return getSubmissionForGrading(submissionId)
 }
 
@@ -37,7 +40,7 @@ export async function gradeAnswerAction(
   const auth = await authorize(['instructor'])
   if ('error' in auth) return { error: auth.error }
 
-  return gradeAnswer(answerId, score, feedback)
+  return gradeAnswer(answerId, score, feedback, auth.userId)
 }
 
 export async function deleteSubmissionAction(submissionId: string) {

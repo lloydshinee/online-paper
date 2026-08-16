@@ -11,5 +11,7 @@ export default defineConfig(({ mode }) => ({
     globalSetup: ['./__tests__/setup.ts'],
     testTimeout: 30000,
     hookTimeout: 30000,
+    // Playwright specs live in e2e/ and run under `npm run test:e2e`.
+    exclude: ['**/node_modules/**', '**/.next/**', 'e2e/**', 'playwright.config.ts'],
   },
 }))

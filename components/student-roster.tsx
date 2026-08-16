@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { getRosterAction, removeStudentAction } from '@/app/actions/classes'
 import { DataTablePagination } from '@/components/data-table-pagination'
 import { Input } from '@/components/ui/input'
@@ -36,18 +36,37 @@ export function StudentRoster({ classId, initialCount }: { classId: string; init
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(false)
+  // Out-of-order responses can never overwrite fresher results.
+  const requestIdRef = useRef(0)
 
   const loadStudents = useCallback(async (p: number, s: string) => {
+    const requestId = ++requestIdRef.current
     setLoading(true)
     const r = await getRosterAction(classId, p, PAGE_SIZE, s || undefined)
+    if (requestId !== requestIdRef.current) return // superseded by a newer request
     setStudents(r.students as Student[])
     setTotal(r.total)
     setLoading(false)
   }, [classId])
 
   useEffect(() => {
-    loadStudents(page, search)
-  }, [page, search, loadStudents])
+    let cancelled = false
+    async function run() {
+      // Defer the initial setState so the effect body itself never calls
+      // setState synchronously (avoids cascading renders).
+      await Promise.resolve()
+      if (cancelled) return
+      const requestId = ++requestIdRef.current
+      setLoading(true)
+      const r = await getRosterAction(classId, page, PAGE_SIZE, search || undefined)
+      if (cancelled || requestId !== requestIdRef.current) return
+      setStudents(r.students as Student[])
+      setTotal(r.total)
+      setLoading(false)
+    }
+    run()
+    return () => { cancelled = true }
+  }, [page, search, classId])
 
   function handleSearch() {
     setPage(1)

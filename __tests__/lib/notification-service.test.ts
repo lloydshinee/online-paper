@@ -2,7 +2,7 @@ import { describe, test, expect, afterAll } from 'vitest'
 import { createClient } from '@supabase/supabase-js'
 import { createUser } from '@/lib/auth/admin-service'
 import { createClass, joinClass } from '@/lib/class-service'
-import { createAssessment, publishAssessment, setAssessmentQuestions } from '@/lib/assessment-service'
+import { createAssessment, setAssessmentQuestions } from '@/lib/assessment-service'
 import {
   createNotificationsForAssessment,
   getNotifications,

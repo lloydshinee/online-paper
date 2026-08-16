@@ -25,16 +25,18 @@ export async function getUnreadCountAction() {
 
 export async function markAsReadAction(notificationId: string) {
   const auth = await authorize(['student'])
-  if ('error' in auth) return
+  if ('error' in auth) return { error: auth.error }
 
-  await markAsRead(notificationId, auth.userId)
+  const result = await markAsRead(notificationId, auth.userId)
   revalidatePath('/dashboard/student')
+  return result
 }
 
 export async function markAllAsReadAction() {
   const auth = await authorize(['student'])
-  if ('error' in auth) return
+  if ('error' in auth) return { error: auth.error }
 
-  await markAllAsRead(auth.userId)
+  const result = await markAllAsRead(auth.userId)
   revalidatePath('/dashboard/student')
+  return result
 }

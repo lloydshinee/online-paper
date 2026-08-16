@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, startTransition } from 'react'
+import { useState, useEffect, useCallback, useRef, startTransition } from 'react'
 import DashboardHeader from '@/components/dashboard-header'
 import { getUsers, getSystemOverview } from '@/app/actions/admin'
 import { CreateUserDialog } from './create-user-dialog'
@@ -46,14 +46,20 @@ export default function AdminDashboard() {
   const [userLastname, setUserLastname] = useState<string | null>(null)
   const [userEmail, setUserEmail] = useState('')
   const [userAvatarUrl, setUserAvatarUrl] = useState<string | null>(null)
+  // Out-of-order search responses can never overwrite fresher results.
+  const userRequestIdRef = useRef(0)
+  const overviewRequestIdRef = useRef(0)
 
   const loadUsers = useCallback(async (page: number, search: string) => {
+    const requestId = ++userRequestIdRef.current
     const offset = (page - 1) * PAGE_SIZE
     const r = await getUsers(PAGE_SIZE, offset, search || undefined)
+    if (requestId !== userRequestIdRef.current) return // superseded
     setUsers(r.users)
     setUserTotal(r.total)
     if (page === 1) {
       const r0 = await getUsers(1, 0)
+      if (requestId !== userRequestIdRef.current) return
       const found = r0.users.find((u) => u.role === 'admin')
       if (found) {
         setUserName([found.firstname, found.lastname].filter(Boolean).join(' ') || 'Admin')
@@ -66,13 +72,27 @@ export default function AdminDashboard() {
   }, [])
 
   useEffect(() => {
-    let ignore = false
-    async function fetch() {
-      await loadUsers(1, '')
+    let cancelled = false
+    async function run() {
+      await Promise.resolve()
+      if (cancelled) return
+      const requestId = ++userRequestIdRef.current
+      const r = await getUsers(PAGE_SIZE, 0)
+      if (cancelled || requestId !== userRequestIdRef.current) return
+      setUsers(r.users)
+      setUserTotal(r.total)
+      const found = r.users.find((u) => u.role === 'admin')
+      if (found) {
+        setUserName([found.firstname, found.lastname].filter(Boolean).join(' ') || 'Admin')
+        setUserFirstname(found.firstname)
+        setUserLastname(found.lastname)
+        setUserEmail(found.email)
+        setUserAvatarUrl(found.avatar_url ?? null)
+      }
     }
-    fetch()
-    return () => { ignore = true }
-  }, [loadUsers])
+    run()
+    return () => { cancelled = true }
+  }, [])
 
   useEffect(() => {
     if (tab === 'overview' && overview.length === 0) {
@@ -107,8 +127,10 @@ export default function AdminDashboard() {
   }
 
   function handleOverviewSearch() {
+    const requestId = ++overviewRequestIdRef.current
     setLoadingOverview(true)
     getSystemOverview(overviewSearch || undefined).then((r) => {
+      if (requestId !== overviewRequestIdRef.current) return
       setOverview(r.classes as OverviewClass[])
       setLoadingOverview(false)
     })

@@ -84,7 +84,7 @@ export async function startSubmission(
 
   const { data: assessment } = await supabase
     .from('assessments')
-    .select('id, state, mode, duration_minutes, accepting_submissions, retakes_allowed')
+    .select('id, state, mode, duration_minutes, accepting_submissions, retakes_allowed, class_id')
     .eq('id', assessmentId)
     .single()
 
@@ -96,6 +96,23 @@ export async function startSubmission(
     return { submission: null, error: 'Live assessments are taken through the live session page' }
   }
 
+  // The student must be enrolled in the assessment's class before writing anything.
+  const { data: enrollment } = await supabase
+    .from('class_enrollments')
+    .select('id')
+    .eq('student_id', studentId)
+    .eq('class_id', assessment.class_id)
+    .maybeSingle()
+
+  if (!enrollment) {
+    return { submission: null, error: 'You are not enrolled in this class' }
+  }
+
+  // The accepting_submissions gate applies to retakes as well as first attempts.
+  if (assessment.accepting_submissions === false) {
+    return { submission: null, error: 'Assessment is not currently accepting submissions' }
+  }
+
   if (opts?.retake) {
     if (!assessment.retakes_allowed) {
       return { submission: null, error: 'Retakes are not allowed for this assessment' }
@@ -104,8 +121,6 @@ export async function startSubmission(
     if (existing) {
       await expireSubmission(existing.id)
     }
-  } else if (assessment.accepting_submissions === false) {
-    return { submission: null, error: 'Assessment is not currently accepting submissions' }
   }
 
   const { data, error } = await supabase
@@ -191,7 +206,7 @@ export async function saveAnswer(
 
   const { data: submission } = await supabase
     .from('submissions')
-    .select('id, status')
+    .select('id, status, assessment_id, started_at')
     .eq('id', submissionId)
     .eq('student_id', studentId)
     .single()
@@ -202,6 +217,14 @@ export async function saveAnswer(
 
   if (submission.status !== 'in_progress') {
     return { error: 'Cannot modify a submitted assessment' }
+  }
+
+  // Enforce the deadline on the write path: if the submission is overdue,
+  // force it through the expiry path and reject the write.
+  const overdue = await isSubmissionOverdue(submission)
+  if (overdue) {
+    await expireSubmission(submissionId, studentId)
+    return { error: 'Time has expired. This assessment has been auto-submitted.' }
   }
 
   const { error } = await supabase
@@ -228,7 +251,7 @@ export async function submitAssessment(
 
   const { data: submission } = await supabase
     .from('submissions')
-    .select('*')
+    .select('id, status, assessment_id, started_at')
     .eq('id', submissionId)
     .eq('student_id', studentId)
     .single()
@@ -241,16 +264,34 @@ export async function submitAssessment(
     return { submission: null, error: 'Assessment already submitted' }
   }
 
-  const { error } = await supabase
+  // Overdue submissions are expired, never marked as a manual submit.
+  const overdue = await isSubmissionOverdue(submission)
+  if (overdue) {
+    return expireSubmission(submissionId, studentId)
+  }
+
+  // Guarded transition: only an in_progress submission can become submitted.
+  // `.select()` makes the race authoritative — the caller that loses a
+  // concurrent double-submit gets no row back and never runs grading, so
+  // grading happens exactly once.
+  const { data: transitioned, error: updateError } = await supabase
     .from('submissions')
     .update({
       status: 'submitted',
       submitted_at: new Date().toISOString(),
     })
     .eq('id', submissionId)
+    .eq('status', 'in_progress')
+    .select('status')
+    .maybeSingle()
 
-  if (error) {
-    return { submission: null, error: error.message }
+  if (updateError) {
+    return { submission: null, error: updateError.message }
+  }
+
+  if (!transitioned || transitioned.status !== 'submitted') {
+    // Another writer transitioned the submission first (double submit).
+    return { submission: null, error: 'Assessment already submitted' }
   }
 
   await gradeSubmission(createServiceClient(), submissionId)
@@ -266,10 +307,11 @@ export async function submitAssessment(
 
 export async function expireSubmission(
   submissionId: string,
+  studentId?: string,
 ): Promise<SubmissionResult> {
   const supabase = createServiceClient()
 
-  const { error } = await supabase
+  let updateQuery = supabase
     .from('submissions')
     .update({
       status: 'expired',
@@ -278,11 +320,23 @@ export async function expireSubmission(
     .eq('id', submissionId)
     .eq('status', 'in_progress')
 
+  if (studentId) {
+    updateQuery = updateQuery.eq('student_id', studentId)
+  }
+
+  // Guarded transition: `.select()` makes the race authoritative. When
+  // another writer transitioned the submission first (a concurrent manual
+  // submit or expiry), this matched 0 rows and grading must be skipped so
+  // exactly one caller grades.
+  const { data: transitioned, error } = await updateQuery.select('status').maybeSingle()
+
   if (error) {
     return { submission: null, error: error.message }
   }
 
-  await gradeSubmission(createServiceClient(), submissionId)
+  if (transitioned) {
+    await gradeSubmission(createServiceClient(), submissionId)
+  }
 
   const { data: updated } = await supabase
     .from('submissions')
@@ -608,6 +662,7 @@ export async function gradeAnswer(
   answerId: string,
   score: number,
   feedback: string | null,
+  instructorId?: string,
 ): Promise<{ error: string | null }> {
   if (score < 0) return { error: 'Score cannot be negative' }
 
@@ -615,11 +670,31 @@ export async function gradeAnswer(
 
   let questionId: string
   let submissionId: string
+  let answerRowId: string | null = null
 
   if (answerId.startsWith('_unanswered_')) {
     const parts = answerId.replace('_unanswered_', '').split('_')
     submissionId = parts[0]
     questionId = parts.slice(1).join('_')
+
+    // Validate the composite ID against the database: the submission must
+    // exist and the question must belong to that submission's assessment.
+    const { data: submissionCheck } = await supabase
+      .from('submissions')
+      .select('id, assessment_id')
+      .eq('id', submissionId)
+      .single()
+
+    if (!submissionCheck) return { error: 'Answer not found' }
+
+    const { data: questionCheck } = await supabase
+      .from('questions')
+      .select('id')
+      .eq('id', questionId)
+      .eq('assessment_id', submissionCheck.assessment_id)
+      .single()
+
+    if (!questionCheck) return { error: 'Question not found' }
   } else {
     const { data: answer } = await supabase
       .from('answers')
@@ -630,27 +705,41 @@ export async function gradeAnswer(
     if (!answer) return { error: 'Answer not found' }
     submissionId = answer.submission_id
     questionId = answer.question_id
+    answerRowId = answer.id
+  }
+
+  // Object-level ownership: the grading instructor must own the assessment's class.
+  if (instructorId) {
+    const authorized = await verifySubmissionOwnership(instructorId, submissionId)
+    if (!authorized) return { error: 'Not authorized' }
   }
 
   const { data: question } = await supabase
     .from('questions')
-    .select('points')
+    .select('type, points')
     .eq('id', questionId)
     .single()
 
   if (!question) return { error: 'Question not found' }
-  if (score > question.points) return { error: `Score exceeds maximum of ${question.points}` }
 
-  if (answerId.startsWith('_unanswered_')) {
-    return createAndGradeAnswer(supabase, submissionId, questionId, score, feedback)
+  // Manual grading is restricted to Essay and Coding questions.
+  if (question.type !== 'Essay' && question.type !== 'Coding') {
+    return { error: `Cannot manually grade a ${question.type} question` }
   }
 
-  const { error } = await supabase
-    .from('answers')
-    .update({ score, feedback, is_correct: null })
-    .eq('id', answerId)
+  if (score > question.points) return { error: `Score exceeds maximum of ${question.points}` }
 
-  if (error) return { error: error.message }
+  if (answerRowId) {
+    const { error } = await supabase
+      .from('answers')
+      .update({ score, feedback, is_correct: null })
+      .eq('id', answerRowId)
+
+    if (error) return { error: error.message }
+  } else {
+    const createError = await createAndGradeAnswer(supabase, submissionId, questionId, score, feedback)
+    if (createError.error) return createError
+  }
 
   await recalculateTotal(submissionId)
 
@@ -839,8 +928,18 @@ export async function getStudentSubmissionHistory(
 
   if (!submissions || submissions.length === 0) return []
 
+  // Strip score values server-side while scores are unreleased.
+  const { data: assessment } = await supabase
+    .from('assessments')
+    .select('scores_released')
+    .eq('id', assessmentId)
+    .single()
+
+  const released = assessment?.scores_released === true
+
   return submissions.map((s, idx) => ({
     ...s,
+    score_total: released ? s.score_total : null,
     attempt_number: idx + 1,
   }))
 }
@@ -849,7 +948,8 @@ function sanitizeQuestionContent(content: Record<string, unknown>): Record<strin
   const sanitized = { ...content }
   delete sanitized.correctAnswer
   delete sanitized.correctIndex
-  delete sanitized.options
+  // Options are the answer choices, not grading data — the student saw them
+  // while answering and the breakdown needs them to render the answer.
   return sanitized
 }
 
@@ -1017,34 +1117,48 @@ export async function verifySubmissionOwnership(
   return !!cls
 }
 
+export interface ViolationResult {
+  violations: number | null
+  error: string | null
+}
+
 export async function recordViolation(
   submissionId: string,
-): Promise<void> {
+  studentId?: string,
+): Promise<ViolationResult> {
   const supabase = createServiceClient()
 
-  const { data: current } = await supabase
-    .from('submissions')
-    .select('violations, assessment_id')
-    .eq('id', submissionId)
-    .single()
+  // Atomic increment via RPC: no read-modify-write lost updates, ownership
+  // bound to the requesting student, and non-in-progress rows ignored.
+  const { data, error } = await supabase.rpc('increment_violation', {
+    p_submission_id: submissionId,
+    p_student_id: studentId ?? null,
+  })
 
-  if (!current) return
+  if (error) {
+    return { violations: null, error: error.message }
+  }
 
-  const next = (current.violations ?? 0) + 1
+  const row = (data as { violations: number; status: string; assessment_id: string }[] | null)?.[0]
 
-  await supabase
-    .from('submissions')
-    .update({ violations: next })
-    .eq('id', submissionId)
+  if (!row) {
+    // Not the owner, or the submission is not in progress — ignore silently.
+    return { violations: null, error: null }
+  }
+
+  const violations = row.violations
 
   const { data: assessment } = await supabase
     .from('assessments')
     .select('proctoring_violations_allowed')
-    .eq('id', current.assessment_id)
+    .eq('id', row.assessment_id)
     .single()
 
   const limit = assessment?.proctoring_violations_allowed
-  if (typeof limit === 'number' && next >= limit) {
+  if (typeof limit === 'number' && violations >= limit) {
+    // Reaching the limit auto-submits with status `expired`.
     await expireSubmission(submissionId)
   }
+
+  return { violations, error: null }
 }

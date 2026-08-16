@@ -60,22 +60,26 @@ export async function getUnreadCount(userId: string): Promise<number> {
   return count ?? 0
 }
 
-export async function markAsRead(notificationId: string, userId: string): Promise<void> {
+export async function markAsRead(notificationId: string, userId: string): Promise<{ error: string | null }> {
   const supabase = createServiceClient()
 
-  await supabase
+  const { error } = await supabase
     .from('notifications')
     .update({ read: true })
     .eq('id', notificationId)
     .eq('user_id', userId)
+
+  return { error: error ? error.message : null }
 }
 
-export async function markAllAsRead(userId: string): Promise<void> {
+export async function markAllAsRead(userId: string): Promise<{ error: string | null }> {
   const supabase = createServiceClient()
 
-  await supabase
+  const { error } = await supabase
     .from('notifications')
     .update({ read: true })
     .eq('user_id', userId)
     .eq('read', false)
+
+  return { error: error ? error.message : null }
 }

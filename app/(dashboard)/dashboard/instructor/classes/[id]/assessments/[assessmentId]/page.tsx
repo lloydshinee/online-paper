@@ -6,7 +6,7 @@ import dynamic from 'next/dynamic'
 import {
   getAssessmentWithQuestions,
 } from '@/app/actions/assessments'
-import { ArrowLeft, Play, Radio } from 'lucide-react'
+import { ArrowLeft, Radio } from 'lucide-react'
 import DashboardHeader from '@/components/dashboard-header'
 import Link from 'next/link'
 import type { AssessmentInfo, PageTab } from './_components/types'

@@ -63,9 +63,15 @@ export default function GradingPanel({ submission, attemptNumber, onBack, onGrad
       const max = maxPointsRef.current[answerId] ?? Infinity
       if (isNaN(score) || score < 0 || score > max) return
 
+      // Reject fractional scores visibly instead of silently rounding them.
+      if (!Number.isInteger(score)) {
+        onError(`Score must be a whole number (received ${scoreStr}). The saved value will not match what you typed.`)
+        return
+      }
+
       setSaving((prev) => ({ ...prev, [answerId]: true }))
       const feedback = feedbackRef.current[answerId]?.trim() || null
-      const result = await gradeAnswerAction(answerId, Math.round(score), feedback)
+      const result = await gradeAnswerAction(answerId, score, feedback)
       setSaving((prev) => ({ ...prev, [answerId]: false }))
 
       if (result.error) {

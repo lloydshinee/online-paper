@@ -3,8 +3,8 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { getUser } from '@/lib/auth/auth-service'
 
 export type AuthorizeResult =
-  | { userId: string; error?: undefined }
-  | { userId?: undefined; error: string }
+  | { userId: string; role: string; error?: undefined }
+  | { userId?: undefined; role?: undefined; error: string }
 
 export async function authorize(
   roles?: string[],
@@ -21,5 +21,5 @@ export async function authorize(
     return { error: 'Not authorized' }
   }
 
-  return { userId: user.id }
+  return { userId: user.id, role: user.role }
 }

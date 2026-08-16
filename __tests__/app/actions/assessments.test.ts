@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll } from 'vitest'
-import { createAssessment, publishAssessment, getClassAssessments, setAssessmentQuestions } from '@/lib/assessment-service'
+import { createAssessment, publishAssessment, getClassAssessments } from '@/lib/assessment-service'
 import {
   createTestUser,
   createTestClass,

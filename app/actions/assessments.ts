@@ -12,6 +12,7 @@ import {
   getAssessmentWithQuestions as getAssessmentWithQuestionsService,
   updateAssessmentSettings,
   getClassAssessments,
+  verifyAssessmentOwnership,
 } from '@/lib/assessment-service'
 import { getClassRoster } from '@/lib/class-service'
 import { createNotificationsForAssessment } from '@/lib/notification-service'
@@ -145,12 +146,17 @@ export async function saveAssessmentQuestionsAction(
   }
 
   revalidatePath(`/dashboard/instructor/classes/${result.questions![0]?.assessment_id ?? ''}`)
-  return { error: null, count: result.questions!.length }
+  return { error: null, count: result.questions!.length, resetCount: result.resetCount }
 }
 
 export async function getAssessmentWithQuestions(assessmentId: string) {
   const auth = await authorize(['instructor'])
   if ('error' in auth) return { assessment: null, questions: [], error: auth.error }
+
+  const authorized = await verifyAssessmentOwnership(auth.userId, assessmentId)
+  if (!authorized) {
+    return { assessment: null, questions: [], error: 'Not authorized' }
+  }
 
   const result = await getAssessmentWithQuestionsService(assessmentId)
 

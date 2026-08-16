@@ -13,7 +13,7 @@ interface ResetPasswordDialogProps {
   onReset?: () => void
 }
 
-export function ResetPasswordDialog({ userId, email, name, onReset }: ResetPasswordDialogProps) {
+export function ResetPasswordDialog({ userId, email, onReset }: ResetPasswordDialogProps) {
   const [open, setOpen] = useState(false)
 
   return (

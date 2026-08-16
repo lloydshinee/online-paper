@@ -1,6 +1,7 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import type { ParsedQuestion } from '@/lib/question-parser'
 import { recalculateAssessmentScores } from '@/lib/submission-service'
+import { sanitizeQuestionForStudent } from '@/lib/question-sanitizer'
 
 export interface DashboardAssessment {
   id: string
@@ -20,7 +21,7 @@ export interface DashboardAssessment {
 
 const ASSESSMENT_SELECT = 'id, class_id, title, mode, state, duration_minutes, scores_released, answer_reveal_enabled, accepting_submissions, retakes_allowed, created_at'
 
-type AssessmentForMap = { id: string; mode: string; duration_minutes: number | null }
+type AssessmentForMap = { id: string; mode: string; duration_minutes: number | null; scores_released?: boolean }
 type SubmissionForMap = { assessment_id: string; status: string; score_total: number | null; started_at: string }
 
 function buildSubmissionMap(
@@ -52,7 +53,8 @@ function buildSubmissionMap(
       if (isOverdue) {
         const completed = subs.find((s) => s.status === 'submitted' || s.status === 'expired')
         if (completed) {
-          result.set(assessmentId, { status: completed.status, score_total: completed.score_total })
+          const scoreTotal = assessment.scores_released === true ? completed.score_total : null
+          result.set(assessmentId, { status: completed.status, score_total: scoreTotal })
         } else {
           result.set(assessmentId, { status: 'expired', score_total: null })
         }
@@ -60,7 +62,9 @@ function buildSubmissionMap(
       }
     }
 
-    result.set(assessmentId, { status: latest.status, score_total: latest.score_total })
+    // Scores are stripped server-side while scores_released is off.
+    const scoreTotal = assessment?.scores_released === true ? latest.score_total : null
+    result.set(assessmentId, { status: latest.status, score_total: scoreTotal })
   }
 
   return result
@@ -305,16 +309,29 @@ export async function getClassAssessments(
   return { assessments: (data as AssessmentData[]) ?? [], error: null }
 }
 
+/**
+ * Stable content identity for a question. Points are deliberately excluded:
+ * editing points in place must keep the same question row (and its answers),
+ * while a content or type change yields a new identity.
+ */
+export function questionContentIdentity(q: { type: string; content: Record<string, unknown> }): string {
+  const sorted: Record<string, unknown> = {}
+  for (const key of Object.keys(q.content).sort()) {
+    sorted[key] = q.content[key]
+  }
+  return JSON.stringify({ type: q.type, content: sorted })
+}
+
 export async function setAssessmentQuestions(
   assessmentId: string,
   instructorId: string,
   questions: ParsedQuestion[],
-): Promise<{ questions: QuestionData[] | null; error: string | null }> {
+): Promise<{ questions: QuestionData[] | null; resetCount: number; error: string | null }> {
   const supabase = createServiceClient()
 
   const authorized = await verifyInstructor(supabase, assessmentId, instructorId)
   if (!authorized) {
-    return { questions: null, error: 'Not authorized' }
+    return { questions: null, resetCount: 0, error: 'Not authorized' }
   }
 
   const { data: assessment } = await supabase
@@ -324,20 +341,35 @@ export async function setAssessmentQuestions(
     .single()
 
   if (!assessment) {
-    return { questions: null, error: 'Assessment not found' }
+    return { questions: null, resetCount: 0, error: 'Assessment not found' }
   }
 
   const { data: existing } = await supabase
     .from('questions')
-    .select('id, order_index')
+    .select('id, type, content, points, order_index')
     .eq('assessment_id', assessmentId)
     .order('order_index')
 
-  const existingByIndex = new Map((existing ?? []).map((q) => [q.order_index, q.id]))
+  // Match incoming questions to existing rows by content identity so that
+  // unchanged questions keep their IDs (and their answers stay bound) even
+  // when the instructor inserts or reorders other questions.
+  const candidatesByIdentity = new Map<string, string[]>()
+  for (const row of (existing as QuestionData[]) ?? []) {
+    const identity = questionContentIdentity(row)
+    const list = candidatesByIdentity.get(identity) ?? []
+    list.push(row.id)
+    candidatesByIdentity.set(identity, list)
+  }
+
+  const usedIds = new Set<string>()
   const updatedIds: string[] = []
 
   for (let idx = 0; idx < questions.length; idx++) {
     const q = questions[idx]
+    const identity = questionContentIdentity(q)
+    const candidates = candidatesByIdentity.get(identity) ?? []
+    const existingId = candidates.find((id) => !usedIds.has(id))
+
     const row = {
       assessment_id: assessmentId,
       type: q.type,
@@ -346,11 +378,12 @@ export async function setAssessmentQuestions(
       order_index: idx,
     }
 
-    if (existingByIndex.has(idx)) {
+    if (existingId) {
+      usedIds.add(existingId)
       const { data: updated } = await supabase
         .from('questions')
         .update(row)
-        .eq('id', existingByIndex.get(idx)!)
+        .eq('id', existingId)
         .select('*')
         .single()
       if (updated) updatedIds.push(updated.id)
@@ -364,15 +397,21 @@ export async function setAssessmentQuestions(
     }
   }
 
-  // Delete questions beyond the new set
-  const newCount = questions.length
-  const toDelete = (existing ?? []).filter((q) => q.order_index >= newCount).map((q) => q.id)
+  // Rows that were not matched are either removed or replaced by a new
+  // identity. Deleting them cascades to their answers, so existing answers
+  // are never re-graded against different question content.
+  const toDelete = ((existing as QuestionData[]) ?? [])
+    .filter((q) => !usedIds.has(q.id))
+    .map((q) => q.id)
+
   if (toDelete.length > 0) {
     await supabase.from('questions').delete().in('id', toDelete)
   }
 
+  const resetCount = toDelete.length
+
   if (updatedIds.length === 0 && questions.length === 0) {
-    return { questions: [], error: null }
+    return { questions: [], resetCount, error: null }
   }
 
   const { data, error } = await supabase
@@ -382,14 +421,14 @@ export async function setAssessmentQuestions(
     .order('order_index')
 
   if (error) {
-    return { questions: null, error: error.message }
+    return { questions: null, resetCount, error: error.message }
   }
 
-  if (data && data.length > 0 && assessment.state !== 'draft') {
+  if (assessment.state !== 'draft') {
     await recalculateAssessmentScores(assessmentId)
   }
 
-  return { questions: data as QuestionData[], error: null }
+  return { questions: data as QuestionData[], resetCount, error: null }
 }
 
 export interface QuestionData {
@@ -411,6 +450,37 @@ export async function getAssessmentQuestions(
     .eq('assessment_id', assessmentId)
     .order('order_index')
   return (data as QuestionData[]) ?? []
+}
+
+export async function getAssessmentQuestionsForStudent(
+  assessmentId: string,
+): Promise<QuestionData[]> {
+  const questions = await getAssessmentQuestions(assessmentId)
+  return questions.map((q) => sanitizeQuestionForStudent(q))
+}
+
+export async function verifyStudentEnrollment(
+  studentId: string,
+  assessmentId: string,
+): Promise<boolean> {
+  const supabase = createServiceClient()
+
+  const { data: assessment } = await supabase
+    .from('assessments')
+    .select('class_id')
+    .eq('id', assessmentId)
+    .single()
+
+  if (!assessment) return false
+
+  const { data: enrollment } = await supabase
+    .from('class_enrollments')
+    .select('id')
+    .eq('student_id', studentId)
+    .eq('class_id', assessment.class_id)
+    .maybeSingle()
+
+  return !!enrollment
 }
 
 export async function getAssessmentTimeLimit(

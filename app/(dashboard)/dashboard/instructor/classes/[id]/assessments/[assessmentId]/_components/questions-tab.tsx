@@ -6,7 +6,7 @@ import {
   getAssessmentWithQuestions,
   saveAssessmentQuestionsAction,
 } from '@/app/actions/assessments'
-import { parseQuestions, formatQuestions } from '@/lib/question-parser'
+import { parseQuestions, parseQuestionsWithDiagnostics, formatQuestions } from '@/lib/question-parser'
 import { Plus, Trash2, Copy, Check, Pencil, Eye, EyeOff, ChevronUp, ChevronDown, CopyPlus, BookOpen } from 'lucide-react'
 import { copyToClipboard } from '@/lib/utils'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
@@ -89,7 +89,6 @@ function QuestionFormFields({ type, mc, setMc, tf, setTf, fill, setFill, essay, 
     `flex h-9 rounded-md border px-3 text-sm shadow-xs focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring transition-colors ${errors[field] ? 'border-destructive focus-visible:ring-destructive' : 'border-input bg-transparent'}`
 
   if (type === 'MultipleChoice') {
-    const filledOptions = [mc.a, mc.b, mc.c, mc.d].filter(Boolean)
     const correctOptions = ['a', 'b', 'c', 'd'].filter((_, i) => [mc.a, mc.b, mc.c, mc.d][i].trim() !== '')
     return (
       <div className="flex flex-col gap-3">
@@ -366,7 +365,7 @@ export default function QuestionsTab({ assessmentId, isDraft }: QuestionsTabProp
   const [inputTab, setInputTab] = useState<InputTab>('manual')
   const [questionText, setQuestionText] = useState('')
   const [addType, setAddType] = useState('MultipleChoice')
-  const [saving, setSaving] = useState(false)
+
   const [editPtsIdx, setEditPtsIdx] = useState<number | null>(null)
   const [ptsInput, setPtsInput] = useState('')
   const [showAddDialog, setShowAddDialog] = useState(false)
@@ -375,7 +374,7 @@ export default function QuestionsTab({ assessmentId, isDraft }: QuestionsTabProp
   const [previewMode, setPreviewMode] = useState(false)
   const [showFormatGuide, setShowFormatGuide] = useState(false)
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false)
-  const [pendingClose, setPendingClose] = useState(false)
+  const [parseWarnings, setParseWarnings] = useState<string[]>([])
 
   const [addPoints, setAddPoints] = useState(1)
 
@@ -433,13 +432,24 @@ export default function QuestionsTab({ assessmentId, isDraft }: QuestionsTabProp
   }, [addType, mc, tf, fill, essay, coding])
 
   async function persistQuestions(qs: QuestionItem[], silent = false) {
-    setSaving(true)
     const result = await saveAssessmentQuestionsAction(assessmentId, qs)
     if (!silent) {
       if (result.error) toast.error(result.error)
-      else toast.success(`Saved ${result.count} question${result.count !== 1 ? 's' : ''}`)
+      else {
+        toast.success(`Saved ${result.count} question${result.count !== 1 ? 's' : ''}`)
+        if (result.resetCount && result.resetCount > 0) {
+          toast.warning(
+            `${result.resetCount} question${result.resetCount !== 1 ? 's' : ''} changed — existing answers were reset and scores recalculated.`,
+            { duration: 8000 },
+          )
+        }
+      }
+    } else if (result.resetCount && result.resetCount > 0) {
+      toast.warning(
+        `${result.resetCount} question${result.resetCount !== 1 ? 's' : ''} changed — existing answers were reset and scores recalculated.`,
+        { duration: 8000 },
+      )
     }
-    setSaving(false)
   }
 
   function addManual() {
@@ -461,7 +471,13 @@ export default function QuestionsTab({ assessmentId, isDraft }: QuestionsTabProp
   }
 
   function addParsed() {
-    const parsed = parseQuestions(questionText)
+    const { questions: parsed, warnings } = parseQuestionsWithDiagnostics(questionText)
+    setParseWarnings(warnings.map((w) => w.message))
+    if (warnings.length > 0) {
+      for (const w of warnings) {
+        toast.error(w.message, { duration: 8000 })
+      }
+    }
     if (parsed.length > 0) {
       const updated = [...questions, ...parsed]
       setQuestions(updated)
@@ -574,7 +590,6 @@ export default function QuestionsTab({ assessmentId, isDraft }: QuestionsTabProp
 
   function handleDialogOpenChange(open: boolean) {
     if (!open && dirty) {
-      setPendingClose(true)
       setShowUnsavedDialog(true)
     } else if (!open) {
       setShowAddDialog(false)
@@ -592,12 +607,10 @@ export default function QuestionsTab({ assessmentId, isDraft }: QuestionsTabProp
     setQuestionText('')
     resetForms()
     setEditingIdx(null)
-    setPendingClose(false)
   }
 
   function cancelClose() {
     setShowUnsavedDialog(false)
-    setPendingClose(false)
   }
 
   function markDirty() {
@@ -791,12 +804,13 @@ Points: 15`}
                         <p className="text-xs font-medium mt-2 mb-1">Rules</p>
                         <div className="text-[10px] text-muted-foreground space-y-0.5">
                           <p>• Each question in a section is separated by a blank line</p>
-                          <p>• MultipleChoice always has exactly 4 options labeled a) b) c) d)</p>
-                          <p>• MultipleChoice/FillInTheBlank use "Answer:" followed by the correct answer</p>
-                          <p>• TrueOrFalse uses "Answer: True" or "Answer: False"</p>
+                          <p>• MultipleChoice options are labeled a) b) c) d) … up to z); any count of options works</p>
+                          <p>• MultipleChoice/FillInTheBlank use &ldquo;Answer:&rdquo; followed by the correct answer</p>
+                          <p>• TrueOrFalse uses &ldquo;Answer: True&rdquo; or &ldquo;Answer: False&rdquo;</p>
                           <p>• Essay and Coding have no Answer line (manual grading)</p>
-                          <p>• Add "Points: N" to any question to set its score (defaults to 1 if omitted)</p>
-                          <p>• Use section headers exactly as shown in brackets</p>
+                          <p>• Points must be a whole number greater than 0 (defaults to 1 if omitted)</p>
+                          <p>• Essay/Coding prompts may span paragraphs; end each question with its &ldquo;Points:&rdquo; line to start the next one</p>
+                          <p>• Use section headers exactly as shown in brackets, with nothing after the closing bracket</p>
                         </div>
                       </div>
                     )}
@@ -829,6 +843,18 @@ Points: 10
 [Coding]
 Describe a coding problem for the student to solve.
 Points: 15`} />
+                  {parseWarnings.length > 0 && (
+                    <div className="mt-3 rounded-md border border-destructive/40 bg-destructive/5 p-3">
+                      <p className="text-xs font-medium text-destructive mb-1">
+                        {parseWarnings.length} problem{parseWarnings.length !== 1 ? 's' : ''} found:
+                      </p>
+                      <ul className="list-disc pl-4 space-y-0.5">
+                        {parseWarnings.map((w, i) => (
+                          <li key={i} className="text-xs text-destructive">{w}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                   <button onClick={addParsed} disabled={!questionText.trim()}
                     className="mt-3 inline-flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50">
                     <Plus size={14} /> Add {parseQuestions(questionText).length} parsed question{parseQuestions(questionText).length !== 1 ? 's' : ''}

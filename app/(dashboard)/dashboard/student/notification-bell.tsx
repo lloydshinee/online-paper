@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef, startTransition } from 'react'
 import { Bell } from 'lucide-react'
 import Link from 'next/link'
+import { toast } from 'sonner'
 import { createClient } from '@/lib/supabase/client'
 import { getNotificationsAction, getUnreadCountAction, markAsReadAction, markAllAsReadAction } from '@/app/actions/notifications'
 
@@ -39,44 +40,69 @@ export function NotificationBell() {
   })
 
   useEffect(() => {
-    let ignore = false
-    startTransition(() => { refresh() })
+    let cancelled = false
+    startTransition(() => {
+      refresh().catch(() => {
+        toast.error('Could not load notifications')
+      })
+    })
 
     let channel: ReturnType<typeof supabase.channel> | null = null
 
-    supabase.auth.getUser().then(({ data }) => {
-      if (!data.user) return
+    supabase.auth.getUser()
+      .then(({ data }) => {
+        if (cancelled) return // unmounted mid-lookup: never subscribe
+        if (!data.user) return
 
-      channel = supabase
-        .channel(`notifs-${data.user.id}-${Date.now()}`)
-        .on(
-          'postgres_changes',
-          {
-            event: 'INSERT',
-            schema: 'public',
-            table: 'notifications',
-            filter: `user_id=eq.${data.user.id}`,
-          },
-          () => { if (!ignore) refreshRef.current() },
-        )
-        .subscribe()
-    })
+        channel = supabase
+          .channel(`notifs-${data.user.id}-${Date.now()}`)
+          .on(
+            'postgres_changes',
+            {
+              event: 'INSERT',
+              schema: 'public',
+              table: 'notifications',
+              filter: `user_id=eq.${data.user.id}`,
+            },
+            () => { if (!cancelled) refreshRef.current() },
+          )
+          .subscribe()
+      })
+      .catch(() => {
+        if (!cancelled) toast.error('Could not connect to notifications')
+      })
 
     return () => {
-      ignore = true
+      cancelled = true
       if (channel) supabase.removeChannel(channel)
     }
   }, [refresh])
 
   const handleMarkRead = async (id: string) => {
-    await markAsReadAction(id)
-    setOpen(false)
-    refresh()
+    try {
+      const result = await markAsReadAction(id)
+      if (result?.error) {
+        toast.error(result.error)
+        return
+      }
+      setOpen(false)
+      refresh()
+    } catch {
+      toast.error('Could not mark notification as read')
+    }
   }
 
   const handleMarkAllRead = async () => {
-    await markAllAsReadAction()
-    refresh()
+    try {
+      const result = await markAllAsReadAction()
+      if (result?.error) {
+        toast.error(result.error)
+        return
+      }
+      refresh()
+    } catch {
+      toast.error('Could not mark notifications as read')
+    }
   }
 
   return (

@@ -3,8 +3,9 @@
 import { useState, useEffect, useCallback, use, useRef, type ReactNode } from 'react'
 import { flushSync } from 'react-dom'
 import { useSearchParams, useRouter } from 'next/navigation'
-import { startAssessmentAction, saveAnswerAction, submitAssessmentAction, getAssessmentData, getSubmissionResultsAction, getSubmissionHistoryAction, getActiveSubmissionAction, recordViolationAction } from '@/app/actions/timed-assessment'
-import { Clock, Lightbulb, ChevronLeft, ChevronRight, CheckCircle, XCircle, Clock3, AlertCircle, AlertTriangle, RotateCcw } from 'lucide-react'
+import { startAssessmentAction, saveAnswerAction, submitAssessmentAction, expireAssessmentAction, getAssessmentData, getSubmissionResultsAction, getSubmissionHistoryAction, getActiveSubmissionAction, recordViolationAction } from '@/app/actions/timed-assessment'
+import { Clock, Lightbulb, ChevronLeft, ChevronRight, CheckCircle, XCircle, Clock3, AlertCircle, AlertTriangle, RotateCcw, Loader2 } from 'lucide-react'
+import { computeDeadline, remainingSeconds } from '@/lib/deadline'
 import DashboardHeader from '@/components/dashboard-header'
 import Link from 'next/link'
 
@@ -69,6 +70,8 @@ interface SubmissionHistoryItem {
   started_at: string
 }
 
+const AUTOSAVE_DEBOUNCE_MS = 600
+
 export default function TakeAssessmentPage({
   params: paramsPromise,
 }: {
@@ -87,34 +90,123 @@ export default function TakeAssessmentPage({
   const [answers, setAnswers] = useState<Record<string, Record<string, unknown>>>({})
   const [timeLeft, setTimeLeft] = useState<number | null>(null)
   const [submitted, setSubmitted] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [showConfirm, setShowConfirm] = useState(false)
   const [results, setResults] = useState<SubmissionResult | null>(null)
+  const [resultsUnavailable, setResultsUnavailable] = useState(false)
   const [submissionHistory, setSubmissionHistory] = useState<SubmissionHistoryItem[]>([])
   const [viewMode, setViewMode] = useState<'loading' | 'take' | 'results'>('loading')
   const [violations, setViolations] = useState(0)
   const violationsRef = useRef(0)
   const submissionIdRef = useRef<string | null>(null)
   const initRef = useRef(false)
+  const deadlineRef = useRef<number | null>(null)
+  const autoExpiringRef = useRef(false)
+  const submittedRef = useRef(false)
+  const latestAnswersRef = useRef<Record<string, Record<string, unknown>>>({})
+  const saveTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  const saveChainsRef = useRef<Record<string, Promise<void>>>({})
 
-  const handleAutoSubmit = useCallback(async () => {
-    if (!submissionId || submitted) return
-    setSubmitted(true)
-    await submitAssessmentAction(submissionId)
+  useEffect(() => {
+    submittedRef.current = submitted
+  }, [submitted])
+
+  const goToResults = useCallback(async () => {
     const result = await getSubmissionResultsAction(assessmentId)
     if (result) {
       setResults(result)
       setViewMode('results')
+      setResultsUnavailable(false)
+    } else {
+      // The submission itself succeeded (submitted=true already halts the
+      // timer/autosave), but the results fetch failed — tell the student to
+      // refresh instead of leaving them on the take view with no signal.
+      setResultsUnavailable(true)
     }
-  }, [submissionId, submitted, assessmentId])
+  }, [assessmentId])
 
+  // Auto-expire paths: timer zero, violation limit, resume-after-deadline,
+  // or a server-side expiry detected by a rejected save.
+  const autoExpire = useCallback(async () => {
+    if (autoExpiringRef.current) return
+    autoExpiringRef.current = true
+    setSubmitted(true)
+    const subId = submissionIdRef.current
+    if (subId) {
+      const result = await expireAssessmentAction(subId)
+      if (result?.error) {
+        // Fall back to a regular submit so the student is not stuck.
+        await submitAssessmentAction(subId)
+      }
+    }
+    await goToResults()
+  }, [goToResults])
+
+  // ------------------------------------------------------------------
+  // Autosave: debounced per question, serialized per question.
+  // ------------------------------------------------------------------
+  const runSave = useCallback((questionId: string) => {
+    const subId = submissionIdRef.current
+    if (!subId) return
+    const content = latestAnswersRef.current[questionId]
+    if (!content) return
+
+    const prev = saveChainsRef.current[questionId] ?? Promise.resolve()
+    const run = prev.then(async () => {
+      const result = await saveAnswerAction(subId, questionId, content)
+      if (result?.error) {
+        if (/expired|submitted/i.test(result.error)) {
+          // The server enforced the deadline — converge to results.
+          void autoExpire()
+        } else {
+          setSaveError(`Could not save your answer: ${result.error}`)
+        }
+      } else {
+        setSaveError(null)
+      }
+    })
+    saveChainsRef.current[questionId] = run.then(
+      () => {},
+      () => {},
+    )
+  }, [autoExpire])
+
+  const scheduleSave = useCallback((questionId: string) => {
+    if (saveTimersRef.current[questionId]) {
+      clearTimeout(saveTimersRef.current[questionId])
+    }
+    saveTimersRef.current[questionId] = setTimeout(() => {
+      delete saveTimersRef.current[questionId]
+      runSave(questionId)
+    }, AUTOSAVE_DEBOUNCE_MS)
+  }, [runSave])
+
+  const flushPendingSaves = useCallback(async () => {
+    const pending = Object.keys(saveTimersRef.current)
+    for (const questionId of pending) {
+      const timer = saveTimersRef.current[questionId]
+      if (timer) {
+        clearTimeout(timer)
+        delete saveTimersRef.current[questionId]
+        runSave(questionId)
+      }
+    }
+    await Promise.allSettled(Object.values(saveChainsRef.current))
+  }, [runSave])
+
+  // ------------------------------------------------------------------
+  // Init / resume
+  // ------------------------------------------------------------------
   useEffect(() => {
     if (initRef.current) return
     initRef.current = true
     async function init() {
       try {
         // First check if the student has a prior submitted/expired submission
-        // Skip if this is a retake attempt
+        // (skip if this is a retake attempt).
         if (!isRetake) {
           const result = await getSubmissionResultsAction(assessmentId)
 
@@ -137,12 +229,12 @@ export default function TakeAssessmentPage({
           }
         }
 
-        // Check if the student has an in-progress submission
+        // Check if the student has an in-progress submission (resume).
         const active = await getActiveSubmissionAction(assessmentId)
         if (active) {
           const data = await getAssessmentData(assessmentId)
-          if (!data) {
-            setError('Assessment not found')
+          if (!data || data.error || !data.assessment) {
+            setError(data?.error ?? 'Assessment not found')
             setLoading(false)
             return
           }
@@ -156,23 +248,22 @@ export default function TakeAssessmentPage({
             savedAnswers[a.question_id] = a.answer_content
           }
           setAnswers(savedAnswers)
+          latestAnswersRef.current = savedAnswers
 
-          // Calculate remaining time if timed
+          // Seed the violation counter from the server value (resume).
+          violationsRef.current = active.violations ?? 0
+          setViolations(active.violations ?? 0)
+
+          // Compute the true deadline from started_at + duration.
           if (data.timeLimit) {
-            const startedAt = new Date(active.started_at).getTime()
-            const elapsed = Math.floor((Date.now() - startedAt) / 1000)
-            const remaining = Math.max(0, data.timeLimit * 60 - elapsed)
+            const deadline = computeDeadline(active.started_at, data.timeLimit)
+            deadlineRef.current = deadline
+            const remaining = remainingSeconds(deadline, Date.now())
             setTimeLeft(remaining)
             if (remaining <= 0) {
-              setSubmitted(true)
-              await submitAssessmentAction(active.id)
-              const result = await getSubmissionResultsAction(assessmentId)
-              if (result) {
-                setResults(result)
-                setViewMode('results')
-                setLoading(false)
-                return
-              }
+              // Resume after the deadline: auto-expire, never a manual submit.
+              await autoExpire()
+              return
             }
           }
 
@@ -181,10 +272,10 @@ export default function TakeAssessmentPage({
           return
         }
 
-        // No prior submission — load assessment for taking
+        // No prior submission — load assessment for taking.
         const data = await getAssessmentData(assessmentId)
-        if (!data) {
-          setError('Assessment not found')
+        if (!data || data.error || !data.assessment) {
+          setError(data?.error ?? 'Assessment not found')
           setLoading(false)
           return
         }
@@ -198,6 +289,8 @@ export default function TakeAssessmentPage({
         setQuestions(data.questions)
 
         if (data.timeLimit) {
+          // Fresh start: deadline = now + duration.
+          deadlineRef.current = computeDeadline(Date.now(), data.timeLimit)
           setTimeLeft(data.timeLimit * 60)
         }
 
@@ -210,70 +303,75 @@ export default function TakeAssessmentPage({
           setError(startResult.error || 'This assessment is not currently available.')
           setLoading(false)
         }
-
-        setLoading(false)
       } catch {
         setError('Failed to load assessment')
         setLoading(false)
       }
     }
     init()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assessmentId, classId])
-
-  // Timer countdown
-  useEffect(() => {
-    if (timeLeft === null || timeLeft <= 0 || submitted) return
-
-    const timer = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev === null || prev <= 1) {
-          clearInterval(timer)
-          return 0
-        }
-        return prev - 1
-      })
-    }, 1000)
-
-    return () => clearInterval(timer)
-  }, [timeLeft, submitted, handleAutoSubmit])
-
-  // Auto-submit when timer expires (must be separate from the setState updater)
-  useEffect(() => {
-    if (timeLeft === 0 && !submitted) {
-      handleAutoSubmit()
-    }
-  }, [timeLeft, submitted, handleAutoSubmit])
 
   useEffect(() => {
     submissionIdRef.current = submissionId
   }, [submissionId])
 
+  // ------------------------------------------------------------------
+  // Timer: single stable interval, wall-clock deadline math.
+  // ------------------------------------------------------------------
+  useEffect(() => {
+    if (viewMode !== 'take' || submitted || deadlineRef.current == null) return
+
+    const timer = setInterval(() => {
+      const remaining = remainingSeconds(deadlineRef.current!, Date.now())
+      setTimeLeft(remaining)
+    }, 1000)
+
+    return () => clearInterval(timer)
+  }, [viewMode, submitted])
+
+  // Auto-expire when the countdown hits the true deadline.
+  useEffect(() => {
+    if (viewMode === 'take' && timeLeft === 0 && !submitted && submissionId) {
+      autoExpire()
+    }
+  }, [timeLeft, viewMode, submitted, submissionId, autoExpire])
+
+  // ------------------------------------------------------------------
+  // Proctoring: seeded from the server, synced to the server count.
+  // ------------------------------------------------------------------
   useEffect(() => {
     if (viewMode !== 'take' || submitted || !assessment) return
 
     const maxViolations = assessment.proctoring_violations_allowed ?? 3
 
     function handleVisibilityChange() {
-      if (document.hidden) {
-        violationsRef.current += 1
+      if (!document.hidden) return
+      const next = violationsRef.current + 1
+      violationsRef.current = next
 
-        flushSync(() => {
-          setViolations(violationsRef.current)
+      flushSync(() => {
+        setViolations(next)
+      })
+
+      const subId = submissionIdRef.current
+      if (subId) {
+        recordViolationAction(subId).then((result) => {
+          if (result && result.violations != null && result.violations !== violationsRef.current) {
+            violationsRef.current = result.violations
+            setViolations(result.violations)
+          }
         })
+      }
 
-        if (submissionIdRef.current) {
-          recordViolationAction(submissionIdRef.current)
-        }
-
-        if (violationsRef.current >= maxViolations) {
-          handleAutoSubmit()
-        }
+      if (next >= maxViolations) {
+        autoExpire()
       }
     }
 
     document.addEventListener('visibilitychange', handleVisibilityChange)
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
-  }, [viewMode, submitted, assessment, handleAutoSubmit])
+  }, [viewMode, submitted, assessment, autoExpire])
 
   useEffect(() => {
     if (viewMode === 'results') {
@@ -281,25 +379,48 @@ export default function TakeAssessmentPage({
     }
   }, [viewMode, assessmentId])
 
-  const saveCurrentAnswer = useCallback(async (newAnswer: Record<string, unknown>) => {
-    if (!submissionId || submitted) return
+  const saveCurrentAnswer = useCallback((newAnswer: Record<string, unknown>) => {
+    if (!submissionId || submittedRef.current) return
     const q = questions[currentIndex]
     if (!q) return
 
+    latestAnswersRef.current[q.id] = newAnswer
     setAnswers((prev) => ({ ...prev, [q.id]: newAnswer }))
-    await saveAnswerAction(submissionId, q.id, newAnswer)
-  }, [submissionId, submitted, questions, currentIndex])
+    scheduleSave(q.id)
+  }, [submissionId, questions, currentIndex, scheduleSave])
 
   const handleSubmit = async () => {
-    if (!submissionId) return
-    await submitAssessmentAction(submissionId)
-    setSubmitted(true)
+    if (!submissionId || submitting || submitted) return
+    setSubmitting(true)
+    setSubmitError(null)
     setShowConfirm(false)
+    try {
+      // Flush everything pending so the graded submission includes the
+      // last keystrokes.
+      await flushPendingSaves()
 
-    const result = await getSubmissionResultsAction(assessmentId)
-    if (result) {
-      setResults(result)
-      setViewMode('results')
+      const result = await submitAssessmentAction(submissionId)
+      if (result?.error) {
+        if (/already submitted/i.test(result.error)) {
+          // Another writer transitioned the submission first (second tab, or
+          // a server-side expiry raced the submit): converge to the results
+          // view instead of stranding the student on the take page.
+          setSubmitted(true)
+          await goToResults()
+          return
+        }
+        setSubmitError(result.error)
+        setSubmitting(false)
+        // The student stays on the take page with their answers intact.
+        return
+      }
+
+      setSubmitted(true)
+      await goToResults()
+    } catch {
+      setSubmitError('Submit failed. Check your connection and try again.')
+    } finally {
+      setSubmitting(false)
     }
   }
 
@@ -384,7 +505,7 @@ export default function TakeAssessmentPage({
 
   if (viewMode === 'results' && results) {
     const answersShown = results.assessment.answer_reveal_enabled
-    const answers = results.answers ?? []
+    const resultAnswers = results.answers ?? []
 
     return (
       <div className="min-h-screen bg-background text-foreground">
@@ -416,6 +537,7 @@ export default function TakeAssessmentPage({
           <h1 className="text-2xl font-semibold tracking-tight mb-2">{results.assessment.title}</h1>
           <p className="text-sm text-muted-foreground mb-8">
             Submitted {results.submission?.submitted_at ? new Date(results.submission.submitted_at).toLocaleString() : ''}
+            {results.submission?.status === 'expired' ? ' (time expired)' : ''}
           </p>
 
           {results.resultStatus === 'hidden' ? (
@@ -496,10 +618,9 @@ export default function TakeAssessmentPage({
                 </div>
               )}
 
-              {answersShown && (
-                <>
-                  {/* Per-question table */}
-                  <div className="rounded-xl border border-border overflow-hidden">
+              {/* Per-question breakdown: shown on release; answer reveal only
+                  gates the correct-answer column (server already strips it). */}
+              <div className="rounded-xl border border-border overflow-hidden">
                 <div className="border-b border-border px-6 py-4">
                   <p className="text-sm font-medium">Question Breakdown</p>
                 </div>
@@ -512,16 +633,14 @@ export default function TakeAssessmentPage({
                         <th className="text-center px-6 py-3 text-xs font-medium text-muted-foreground w-20">Points</th>
                         <th className="text-center px-6 py-3 text-xs font-medium text-muted-foreground w-20">Earned</th>
                         <th className="text-center px-6 py-3 text-xs font-medium text-muted-foreground w-24">Status</th>
+                        <th className="text-left px-6 py-3 text-xs font-medium text-muted-foreground">Your Answer</th>
                         {answersShown && (
-                          <>
-                            <th className="text-left px-6 py-3 text-xs font-medium text-muted-foreground">Your Answer</th>
-                            <th className="text-left px-6 py-3 text-xs font-medium text-muted-foreground">Correct Answer</th>
-                          </>
+                          <th className="text-left px-6 py-3 text-xs font-medium text-muted-foreground">Correct Answer</th>
                         )}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {answers.map((a, idx) => {
+                      {resultAnswers.map((a, idx) => {
                         const q = a.questions
                         const status = getStatusDisplay(a)
                         const isManual = q.type === 'Essay' || q.type === 'Coding'
@@ -542,15 +661,13 @@ export default function TakeAssessmentPage({
                                 {status.label}
                               </span>
                             </td>
+                            <td className="px-6 py-3 text-xs max-w-[200px] truncate">
+                              {getAnswerDisplayText(q.type, a.answer_content, q.content)}
+                            </td>
                             {answersShown && (
-                              <>
-                                <td className="px-6 py-3 text-xs max-w-[200px] truncate">
-                                  {getAnswerDisplayText(q.type, a.answer_content, q.content)}
-                                </td>
-                                <td className="px-6 py-3 text-xs max-w-[200px] truncate text-green-700 dark:text-green-400 font-medium">
-                                  {isManual ? '-' : getCorrectAnswerDisplay(q.type, q.content)}
-                                </td>
-                              </>
+                              <td className="px-6 py-3 text-xs max-w-[200px] truncate text-green-700 dark:text-green-400 font-medium">
+                                {isManual ? '-' : getCorrectAnswerDisplay(q.type, q.content)}
+                              </td>
                             )}
                           </tr>
                         )
@@ -561,7 +678,7 @@ export default function TakeAssessmentPage({
                         <td className="px-6 py-3 text-xs" colSpan={2}>Total</td>
                         <td className="px-6 py-3 text-center text-xs">{results.assessment.total_points}</td>
                         <td className="px-6 py-3 text-center text-xs">{results.submission?.score_total ?? '-'}</td>
-                        <td className="px-6 py-3 text-center text-xs" colSpan={answersShown ? 3 : 1}>
+                        <td className="px-6 py-3 text-center text-xs" colSpan={answersShown ? 3 : 2}>
                           {results.assessment.total_points > 0
                             ? `${Math.round(((results.submission?.score_total ?? 0) / results.assessment.total_points) * 100)}%`
                             : ''}
@@ -573,16 +690,16 @@ export default function TakeAssessmentPage({
               </div>
 
               {/* Manual question details (Essay/Coding with feedback) */}
-              {answersShown && answers.some((a) => (a.questions.type === 'Essay' || a.questions.type === 'Coding') && (a.feedback || a.score != null)) && (
+              {resultAnswers.some((a) => (a.questions.type === 'Essay' || a.questions.type === 'Coding') && (a.feedback || a.score != null)) && (
                 <div className="rounded-xl border border-border mt-8">
                   <div className="border-b border-border px-6 py-4">
                     <p className="text-sm font-medium">Feedback</p>
                   </div>
                   <div className="px-6 py-4 divide-y divide-border -mx-6">
-                    {answers.filter((a) => a.questions.type === 'Essay' || a.questions.type === 'Coding').map((a) => {
+                    {resultAnswers.filter((a) => a.questions.type === 'Essay' || a.questions.type === 'Coding').map((a) => {
                       if (!a.feedback && a.score == null) return null
                       const q = a.questions
-                      const realIdx = answers.findIndex((ans) => ans.id === a.id) + 1
+                      const realIdx = resultAnswers.findIndex((ans) => ans.id === a.id) + 1
                       return (
                         <div key={a.id} className="px-6 py-4">
                           <div className="flex items-center gap-2 mb-2">
@@ -593,7 +710,7 @@ export default function TakeAssessmentPage({
                             )}
                           </div>
                           <p className="text-xs text-muted-foreground mb-1">
-                            {q.type === 'Essay' ? (q.content.prompt as string) : (q.content.prompt as string)}
+                            {q.content.prompt as string}
                           </p>
                           <p className="text-sm mt-2 whitespace-pre-wrap border-l-2 border-muted pl-3">
                             {getAnswerDisplayText(q.type, a.answer_content, q.content)}
@@ -609,8 +726,6 @@ export default function TakeAssessmentPage({
                     })}
                   </div>
                 </div>
-               )}
-                </>
               )}
             </div>
           )}
@@ -690,6 +805,33 @@ export default function TakeAssessmentPage({
                 ? ' Assessment auto-submitted.'
                 : ' Your assessment will be auto-submitted if you exceed the limit.'}
             </p>
+          </div>
+        </div>
+      )}
+
+      {saveError && (
+        <div className="mx-auto max-w-4xl px-6 pt-4">
+          <div className="rounded-md bg-yellow-100 dark:bg-yellow-900/20 px-4 py-3 flex items-center gap-2">
+            <AlertTriangle size={16} className="text-yellow-700 dark:text-yellow-400 shrink-0" />
+            <p className="text-sm text-yellow-700 dark:text-yellow-400">{saveError}</p>
+          </div>
+        </div>
+      )}
+
+      {submitError && (
+        <div className="mx-auto max-w-4xl px-6 pt-4">
+          <div className="rounded-md bg-destructive/10 px-4 py-3 flex items-center gap-2">
+            <AlertCircle size={16} className="text-destructive shrink-0" />
+            <p className="text-sm text-destructive">{submitError}</p>
+          </div>
+        </div>
+      )}
+
+      {resultsUnavailable && (
+        <div className="mx-auto max-w-4xl px-6 pt-4">
+          <div className="rounded-md bg-blue-100 dark:bg-blue-900/20 px-4 py-3 flex items-center gap-2">
+            <Clock3 size={16} className="text-blue-700 dark:text-blue-400 shrink-0" />
+            <p className="text-sm text-blue-700 dark:text-blue-400">Results unavailable — please refresh the page.</p>
           </div>
         </div>
       )}
@@ -796,9 +938,11 @@ export default function TakeAssessmentPage({
             ) : (
               <button
                 onClick={() => setShowConfirm(true)}
-                className="rounded-md bg-primary px-4 py-2.5 sm:py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+                disabled={submitting}
+                className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2.5 sm:py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
               >
-                Submit Assessment
+                {submitting && <Loader2 size={14} className="animate-spin" />}
+                {submitting ? 'Submitting...' : 'Submit Assessment'}
               </button>
             )}
           </div>
@@ -821,15 +965,18 @@ export default function TakeAssessmentPage({
             <div className="flex items-center justify-end gap-3 mt-4">
               <button
                 onClick={() => setShowConfirm(false)}
-                className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted transition-colors"
+                disabled={submitting}
+                className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted transition-colors disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 onClick={handleSubmit}
-                className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+                disabled={submitting}
+                className="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
               >
-                Submit
+                {submitting && <Loader2 size={14} className="animate-spin" />}
+                {submitting ? 'Submitting...' : 'Submit'}
               </button>
             </div>
           </div>

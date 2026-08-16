@@ -7,24 +7,22 @@ import {
   startLiveSessionAction,
   advanceLiveSessionAction,
   endLiveSessionAction,
-  getLiveSessionByAssessmentAction,
+  getLiveSessionByAssessmentInstructorAction,
   getSessionAnswerCountsAction,
 } from '@/app/actions/live-assessment'
-import { getAssessmentWithQuestions, updateAssessmentSettingsAction } from '@/app/actions/assessments'
+import { getAssessmentWithQuestions } from '@/app/actions/assessments'
 import { createClient } from '@/lib/supabase/client'
 import {
   ArrowLeft,
   Lightbulb,
-  Play,
   ChevronRight,
   ChevronLeft,
   Square,
   Users,
-  Radio,
-  Loader2,
   CheckCircle2,
   RotateCcw,
   Eye,
+  Loader2,
 } from 'lucide-react'
 import Link from 'next/link'
 import type { RealtimeChannel } from '@supabase/supabase-js'
@@ -67,16 +65,21 @@ export default function InstructorLivePage({
   const [assessmentTitle, setAssessmentTitle] = useState<string>('')
   const [presenceState, setPresenceState] = useState<Record<string, unknown>>({})
   const [answerCounts, setAnswerCounts] = useState<Record<string, number>>({})
+  const [ending, setEnding] = useState(false)
 
   const supabase = createClient()
   const channelRef = useRef<RealtimeChannel | null>(null)
+  const userIdRef = useRef<string | null>(null)
 
   useEffect(() => {
     async function init() {
       const [sessionResult, assessmentResult] = await Promise.all([
-        getLiveSessionByAssessmentAction(assessmentId).catch(() => null),
+        getLiveSessionByAssessmentInstructorAction(assessmentId).catch(() => null),
         getAssessmentWithQuestions(assessmentId).catch(() => null),
       ])
+
+      const { data: authData } = await supabase.auth.getUser().catch(() => ({ data: { user: null } }))
+      userIdRef.current = authData.user?.id ?? null
 
       if (sessionResult) {
         setSession(sessionResult)
@@ -85,18 +88,22 @@ export default function InstructorLivePage({
           getSessionAnswerCountsAction(sessionResult.id, questionIds).then(setAnswerCounts)
         }
       } else {
-        await updateAssessmentSettingsAction(assessmentId, { retakes_allowed: true })
+        // Create and start, surfacing failures instead of silently continuing.
         const created = await createLiveSessionAction(assessmentId)
-        if (created.session) {
-          await startLiveSessionAction(created.session.id, assessmentId)
-          const reloaded = await getLiveSessionByAssessmentAction(assessmentId)
-          if (reloaded) {
-            setSession(reloaded)
-          } else {
-            setError('Failed to load session')
-          }
-        } else {
+        if (!created.session) {
           setError(created.error ?? 'Failed to create session')
+        } else {
+          const started = await startLiveSessionAction(created.session.id, assessmentId)
+          if (started.error) {
+            setError(started.error ?? 'Failed to start session')
+          } else {
+            const reloaded = await getLiveSessionByAssessmentInstructorAction(assessmentId)
+            if (reloaded) {
+              setSession(reloaded)
+            } else {
+              setError('Failed to load session')
+            }
+          }
         }
       }
       if (assessmentResult?.assessment) {
@@ -105,35 +112,39 @@ export default function InstructorLivePage({
       setLoading(false)
     }
     init()
-  }, [assessmentId, refreshKey])
+  }, [assessmentId, refreshKey, supabase])
 
   useEffect(() => {
     if (!session) return
 
+    const sessionId = session.id
     const questionIds = session.questions.map((q) => q.id)
     if (questionIds.length > 0) {
-      getSessionAnswerCountsAction(session.id, questionIds).then(setAnswerCounts)
+      getSessionAnswerCountsAction(sessionId, questionIds).then(setAnswerCounts)
     }
 
-    const channel = supabase.channel(`live-${session.id}`, {
-      config: { presence: { key: 'instructor' } },
+    const channel = supabase.channel(`live-${sessionId}`, {
+      config: { presence: { key: userIdRef.current ?? `instructor-${Date.now()}` } },
     })
 
     channelRef.current = channel
 
     channel
       .on('presence', { event: 'sync' }, () => {
-        setPresenceState(channel.presenceState())
+        const state = channel.presenceState()
+        const students = Object.values(state).filter(
+          (metas) => (metas as { role?: string }[]).some((m) => m.role === 'student'),
+        )
+        setPresenceState(Object.fromEntries(students.map((m, i) => [String(i), m])))
       })
       .on('broadcast', { event: 'answer' }, () => {
-        const qids = session.questions.map((q) => q.id)
-        if (qids.length > 0) {
-          getSessionAnswerCountsAction(session.id, qids).then(setAnswerCounts)
+        if (questionIds.length > 0) {
+          getSessionAnswerCountsAction(sessionId, questionIds).then(setAnswerCounts)
         }
       })
       .subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
-          await channel.track({ role: 'instructor', joined_at: new Date().toISOString() })
+          await channel.track({ role: 'instructor', user_id: userIdRef.current, joined_at: new Date().toISOString() })
         }
       })
 
@@ -141,6 +152,7 @@ export default function InstructorLivePage({
       channelRef.current = null
       supabase.removeChannel(channel)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.id, supabase])
 
   const broadcast = (event: string, payload?: Record<string, unknown>) => {
@@ -148,7 +160,22 @@ export default function InstructorLivePage({
   }
 
   const handleAdvance = async (direction: 'next' | 'prev') => {
-    if (!session) return
+    // Navigation is disabled while the End grace window is running (ticket 21
+    // F3): an advance racing the end flip would strand students mid-question.
+    if (!session || ending) return
+
+    // A Waiting session must be started before it can advance (ticket 18):
+    // a re-entered or previously-failed Waiting session is startable from
+    // the Begin control, with the error surfaced and the session retained
+    // so the instructor can retry without leaving the page.
+    if (session.status === 'waiting') {
+      const started = await startLiveSessionAction(session.id, assessmentId)
+      if (started.error || !started.session) {
+        toast.error(started.error ?? 'Failed to start session')
+        return
+      }
+    }
+
     const result = await advanceLiveSessionAction(session.id, direction)
     if (result.error) {
       toast.error(result.error)
@@ -159,30 +186,36 @@ export default function InstructorLivePage({
           ? {
               ...prev,
               current_question_index: newIndex,
+              status: result.session!.status,
             }
           : prev,
       )
-      broadcast(direction, {
-        questionIndex: newIndex,
-        question: result.question as unknown as Record<string, unknown>,
-      })
+      // Only the index is broadcast; students fetch the sanitized question
+      // server-side so the answer key never crosses the channel.
+      broadcast(direction, { questionIndex: newIndex })
     }
   }
 
   const handleEnd = async () => {
-    if (!session) return
+    if (!session || ending) return
+    setEnding(true)
+    // Broadcast the end event first so students flush their pending saves
+    // before the server converts live answers into submissions.
+    broadcast('end')
     const result = await endLiveSessionAction(session.id, assessmentId)
     if (result.error) {
       toast.error(result.error)
+      const reloaded = await getLiveSessionByAssessmentInstructorAction(assessmentId).catch(() => null)
+      if (reloaded) setSession(reloaded)
     } else {
-      broadcast('end')
       setSession((prev) => (prev ? { ...prev, status: 'ended' } : prev))
     }
+    setEnding(false)
   }
 
   const currentQuestion = session?.questions[session.current_question_index]
   const totalQuestions = session?.questions.length ?? 0
-  const studentCount = Object.keys(presenceState).filter((k) => k !== 'instructor').length
+  const studentCount = Object.keys(presenceState).length
   const currentAnswerCount = currentQuestion ? (answerCounts[currentQuestion.id] ?? 0) : 0
 
   if (loading) {
@@ -256,7 +289,7 @@ export default function InstructorLivePage({
 
         <div className="flex flex-wrap items-start justify-between gap-4 mb-8">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Live Session</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">Live Session{assessmentTitle ? ` — ${assessmentTitle}` : ''}</h1>
             <div className="flex items-center gap-2 mt-1">
               <span
                 className={`rounded-md px-1.5 py-0.5 text-xs ${
@@ -284,9 +317,11 @@ export default function InstructorLivePage({
             {(session.status === 'active' || session.status === 'waiting') && (
               <button
                 onClick={handleEnd}
-                className="inline-flex items-center gap-1.5 rounded-md border border-border px-4 py-2 text-sm text-destructive hover:bg-destructive/10 transition-colors"
+                disabled={ending}
+                className="inline-flex items-center gap-1.5 rounded-md border border-border px-4 py-2 text-sm text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <Square size={14} /> End Session
+                {ending ? <Loader2 size={14} className="animate-spin" /> : <Square size={14} />}
+                {ending ? 'Ending…' : 'End Session'}
               </button>
             )}
           </div>
@@ -313,7 +348,7 @@ export default function InstructorLivePage({
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => handleAdvance('prev')}
-                  disabled={session.current_question_index <= 0}
+                  disabled={ending || session.current_question_index <= 0}
                   className="inline-flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
                 >
                   <ChevronLeft size={14} /> Previous
@@ -323,7 +358,7 @@ export default function InstructorLivePage({
                 </span>
                 <button
                   onClick={() => handleAdvance('next')}
-                  disabled={session.current_question_index >= totalQuestions - 1}
+                  disabled={ending || session.current_question_index >= totalQuestions - 1}
                   className="inline-flex items-center gap-1 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
                 >
                   {session.current_question_index === -1 ? 'Begin' : 'Next'} <ChevronRight size={14} />

@@ -10,12 +10,14 @@ import {
   getStudentSubmissionHistory,
   getActiveSubmission,
   recordViolation,
+  expireSubmission,
 } from '@/lib/submission-service'
 import {
   getStudentAssessments as getStudentAssessmentsService,
   getAllStudentAssessments as getAllStudentAssessmentsService,
-  getAssessmentQuestions,
+  getAssessmentQuestionsForStudent,
   getAssessmentTimeLimit,
+  verifyStudentEnrollment,
 } from '@/lib/assessment-service'
 
 export async function getStudentClassAssessments(classId: string) {
@@ -63,13 +65,20 @@ export async function submitAssessmentAction(submissionId: string) {
   return submitAssessment(submissionId, auth.userId)
 }
 
+export async function expireAssessmentAction(submissionId: string) {
+  const auth = await authorize()
+  if ('error' in auth) return { error: auth.error, submission: null }
+
+  // Client auto-submit paths (timer zero, violation limit, resume-after-deadline)
+  // must produce a submission with status `expired`, never `submitted`.
+  return expireSubmission(submissionId, auth.userId)
+}
+
 export async function getAssessmentData(assessmentId: string) {
   const auth = await authorize()
-  if ('error' in auth) return null
+  if ('error' in auth) return { error: auth.error, assessment: null, questions: [], timeLimit: null }
 
   const supabase = await createClient()
-  const questions = await getAssessmentQuestions(assessmentId)
-  const timeLimit = await getAssessmentTimeLimit(assessmentId)
 
   const { data: assessment } = await supabase
     .from('assessments')
@@ -77,11 +86,18 @@ export async function getAssessmentData(assessmentId: string) {
     .eq('id', assessmentId)
     .single()
 
-  if (!assessment) return null
+  if (!assessment) return { error: 'Assessment not found', assessment: null, questions: [], timeLimit: null }
 
-  if (assessment.state === 'draft') return null
+  if (assessment.state === 'draft') return { error: 'Assessment is not available', assessment: null, questions: [], timeLimit: null }
 
-  return { assessment, questions, timeLimit }
+  // Only enrolled students may read the take-page payload.
+  const enrolled = await verifyStudentEnrollment(auth.userId, assessmentId)
+  if (!enrolled) return { error: 'You are not enrolled in this class', assessment: null, questions: [], timeLimit: null }
+
+  const questions = await getAssessmentQuestionsForStudent(assessmentId)
+  const timeLimit = await getAssessmentTimeLimit(assessmentId)
+
+  return { error: null, assessment, questions, timeLimit }
 }
 
 export async function getSubmissionResultsAction(assessmentId: string) {
@@ -107,7 +123,8 @@ export async function getActiveSubmissionAction(assessmentId: string) {
 
 export async function recordViolationAction(submissionId: string) {
   const auth = await authorize()
-  if ('error' in auth) return
+  if ('error' in auth) return { violations: null, error: auth.error }
 
-  await recordViolation(submissionId)
+  // The service scopes the write to the requesting student's own submission.
+  return recordViolation(submissionId, auth.userId)
 }

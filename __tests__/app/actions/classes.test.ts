@@ -1,5 +1,4 @@
 import { describe, test, expect, beforeAll, afterAll } from 'vitest'
-import { createServiceClient } from '@/lib/supabase/service'
 import { getInstructorClasses, joinClass, getStudentClasses } from '@/lib/class-service'
 import {
   createTestUser,

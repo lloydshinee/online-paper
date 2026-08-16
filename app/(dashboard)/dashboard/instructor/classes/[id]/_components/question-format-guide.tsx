@@ -60,12 +60,13 @@ Points: 15`}
             <p className="text-xs font-medium mt-3 mb-1">Rules</p>
             <div className="text-[10px] text-muted-foreground space-y-0.5">
               <p>&bull; Each question in a section is separated by a blank line</p>
-              <p>&bull; MultipleChoice always has exactly 4 options labeled a) b) c) d)</p>
+              <p>&bull; MultipleChoice options are labeled a) b) c) d) &hellip; up to z); any count of options works</p>
               <p>&bull; MultipleChoice/FillInTheBlank use &ldquo;Answer: &rdquo; followed by the correct answer</p>
               <p>&bull; TrueOrFalse uses &ldquo;Answer: True&rdquo; or &ldquo;Answer: False&rdquo;</p>
               <p>&bull; Essay and Coding have no Answer line (manual grading)</p>
-              <p>&bull; Add &ldquo;Points: N&rdquo; to any question to set its score (defaults to 1 if omitted)</p>
-              <p>&bull; Use section headers exactly as shown in brackets</p>
+              <p>&bull; Points must be a whole number greater than 0 (defaults to 1 if omitted)</p>
+              <p>&bull; Essay/Coding prompts may span paragraphs; end each question with its &ldquo;Points:&rdquo; line to start the next one</p>
+              <p>&bull; Use section headers exactly as shown in brackets, with nothing after the closing bracket</p>
             </div>
           </div>
         </DialogContent>

@@ -8,6 +8,7 @@ import {
   closeAssessmentAction,
   deleteAssessmentAction,
   updateAssessmentSettingsAction,
+  getAssessmentWithQuestions,
 } from '@/app/actions/assessments'
 import { getAssessmentSubmissions } from '@/app/actions/grading'
 import { AlertTriangle } from 'lucide-react'
@@ -76,8 +77,17 @@ export default function SettingsTab({ assessmentId, classId, assessment, onAsses
 
   async function saveSetting(updates: Record<string, unknown>) {
     const result = await updateAssessmentSettingsAction(assessmentId, updates as Parameters<typeof updateAssessmentSettingsAction>[1])
-    if (result.error) toast.error(result.error)
-    else if (result.assessment) {
+    if (result.error) {
+      // Revert local toggle state to the true server state.
+      toast.error(result.error)
+      const current = await getAssessmentWithQuestions(assessmentId).catch(() => null)
+      if (current?.assessment) {
+        setScoresReleased(current.assessment.scores_released)
+        setAnswerRevealed(current.assessment.answer_reveal_enabled)
+        setAcceptingSubmissions(current.assessment.accepting_submissions)
+        setRetakesAllowed(current.assessment.retakes_allowed)
+      }
+    } else if (result.assessment) {
       onAssessmentUpdate(result.assessment)
       setScoresReleased(result.assessment.scores_released)
       setAnswerRevealed(result.assessment.answer_reveal_enabled)
@@ -115,7 +125,10 @@ export default function SettingsTab({ assessmentId, classId, assessment, onAsses
             </div>
             <Switch
               checked={!isDraft}
-              onCheckedChange={(checked) => { checked ? handlePublish() : handleUnpublish() }}
+              onCheckedChange={(checked) => {
+                if (checked) handlePublish()
+                else handleUnpublish()
+              }}
               aria-label="Publish assessment"
             />
           </div>
@@ -181,7 +194,8 @@ export default function SettingsTab({ assessmentId, classId, assessment, onAsses
                     return
                   }
                 }
-                setScoresReleased(checked)
+                // State is driven by the server response; a failed save
+                // leaves the toggle in its true state.
                 saveSetting({ scores_released: checked })
               }}
               aria-label="Release scores"
@@ -197,7 +211,6 @@ export default function SettingsTab({ assessmentId, classId, assessment, onAsses
             <Switch
               checked={answerRevealed}
               onCheckedChange={(checked) => {
-                setAnswerRevealed(checked)
                 saveSetting({ answer_reveal_enabled: checked })
               }}
               aria-label="Show answers"
@@ -213,7 +226,6 @@ export default function SettingsTab({ assessmentId, classId, assessment, onAsses
             <Switch
               checked={acceptingSubmissions}
               onCheckedChange={(checked) => {
-                setAcceptingSubmissions(checked)
                 saveSetting({ accepting_submissions: checked })
               }}
               aria-label="Accept submissions"
@@ -229,7 +241,6 @@ export default function SettingsTab({ assessmentId, classId, assessment, onAsses
             <Switch
               checked={retakesAllowed}
               onCheckedChange={(checked) => {
-                setRetakesAllowed(checked)
                 saveSetting({ retakes_allowed: checked })
               }}
               aria-label="Allow retakes"
@@ -310,7 +321,7 @@ export default function SettingsTab({ assessmentId, classId, assessment, onAsses
               className="rounded-md border border-border px-4 py-2 text-sm font-medium hover:bg-muted transition-colors">
               Cancel
             </button>
-            <button onClick={() => { setShowReleaseWarning(false); setScoresReleased(true); saveSetting({ scores_released: true }) }}
+            <button onClick={() => { setShowReleaseWarning(false); saveSetting({ scores_released: true }) }}
               className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors">
               Release anyway
             </button>

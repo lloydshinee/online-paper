@@ -12,6 +12,7 @@ import {
   getStudentSubmissionResults,
   recalculateAssessmentScores,
   gradeAnswer,
+  expireSubmission,
 } from '@/lib/submission-service'
 import { updateAssessmentSettings, getAssessmentQuestions } from '@/lib/assessment-service'
 import type { ParsedQuestion } from '@/lib/question-parser'
@@ -86,14 +87,16 @@ describe('submission service', () => {
     expect(result.submission!.started_at).toBeDefined()
   })
 
-  test('cannot start two active submissions for same assessment', async () => {
+  test('starting while a submission is In Progress resumes the same submission (idempotent)', async () => {
     const { student, assessment } = await setupAssessment()
 
     const first = await startSubmission(student.id, assessment.id)
     expect(first.error).toBeNull()
 
     const second = await startSubmission(student.id, assessment.id)
-    expect(second.error).toBeDefined()
+    expect(second.error).toBeNull()
+    expect(second.submission!.id).toBe(first.submission!.id)
+    expect(second.submission!.status).toBe('in_progress')
   })
 
   test('student saves answers', async () => {
@@ -323,7 +326,7 @@ describe('retakes', () => {
   })
 
   test('startSubmission rejects surprise re-entry after submit without retake flag', async () => {
-    const { instructor, student, assessment } = await setupAssessment()
+    const { student, assessment } = await setupAssessment()
     const questions = await getAssessmentQuestions(assessment.id)
 
     // Submit first attempt
@@ -451,7 +454,7 @@ describe('score recalculation', () => {
     // Manually grade the essay
     const sub = await getSubmission(submission!.id, student.id)
     const essayAnswer = sub!.answers.find((a) => a.question_id === questions[2].id)
-    await gradeAnswer(essayAnswer!.id, 4, 'Well written')
+    await gradeAnswer(essayAnswer!.id, 4, 'Well written', instructor.id)
 
     // Verify manual grade
     await updateAssessmentSettings(assessment.id, instructor.id, {
@@ -476,5 +479,238 @@ describe('score recalculation', () => {
     const essayAfter = after!.answers!.find((a) => a.questions.type === 'Essay')
     expect(essayAfter!.score).toBe(4)
     expect(essayAfter!.feedback).toBe('Well written')
+  })
+})
+
+describe('deadline enforcement on write paths', () => {
+  function getAdmin() {
+    return createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      { auth: { autoRefreshToken: false, persistSession: false } },
+    )
+  }
+
+  async function backdateSubmission(submissionId: string, hoursAgo = 2) {
+    const admin = getAdmin()
+    const startedAt = new Date(Date.now() - hoursAgo * 60 * 60 * 1000).toISOString()
+    await admin.from('submissions').update({ started_at: startedAt }).eq('id', submissionId)
+  }
+
+  test('saving an answer after the deadline is rejected and expires + grades the submission', async () => {
+    const { student, assessment } = await setupAssessment()
+    const questions = await getAssessmentQuestions(assessment.id)
+
+    const { submission } = await startSubmission(student.id, assessment.id)
+    await saveAnswer(submission!.id, questions[0].id, student.id, { selectedIndex: 1 })
+    await backdateSubmission(submission!.id)
+
+    const result = await saveAnswer(submission!.id, questions[1].id, student.id, { value: true })
+
+    expect(result.error).toBeDefined()
+    expect(result.error).toContain('expired')
+
+    // Submission was expired and auto-graded server-side
+    const admin = getAdmin()
+    const { data: row } = await admin.from('submissions').select('status, score_total').eq('id', submission!.id).single()
+    expect(row!.status).toBe('expired')
+    expect(row!.score_total).not.toBeNull()
+  })
+
+  test('submitting after the deadline yields status expired, not submitted', async () => {
+    const { student, assessment } = await setupAssessment()
+    const questions = await getAssessmentQuestions(assessment.id)
+
+    const { submission } = await startSubmission(student.id, assessment.id)
+    await saveAnswer(submission!.id, questions[0].id, student.id, { selectedIndex: 1 })
+    await backdateSubmission(submission!.id)
+
+    const result = await submitAssessment(submission!.id, student.id)
+
+    expect(result.error).toBeNull()
+    expect(result.submission!.status).toBe('expired')
+  })
+
+  test('manual submit before the deadline yields submitted; double submit cannot grade twice', async () => {
+    const { student, assessment } = await setupAssessment()
+    const questions = await getAssessmentQuestions(assessment.id)
+
+    const { submission } = await startSubmission(student.id, assessment.id)
+    await saveAnswer(submission!.id, questions[0].id, student.id, { selectedIndex: 1 })
+
+    const first = await submitAssessment(submission!.id, student.id)
+    expect(first.error).toBeNull()
+    expect(first.submission!.status).toBe('submitted')
+    const firstScore = first.submission!.score_total
+
+    const second = await submitAssessment(submission!.id, student.id)
+    expect(second.error).toBeDefined()
+
+    const admin = getAdmin()
+    const { data: row } = await admin.from('submissions').select('status, score_total').eq('id', submission!.id).single()
+    expect(row!.status).toBe('submitted')
+    expect(row!.score_total).toBe(firstScore)
+  })
+
+  test('expireSubmission is scoped to the owning student', async () => {
+    const { student, assessment } = await setupAssessment()
+    const { submission } = await startSubmission(student.id, assessment.id)
+
+    // Wrong student cannot expire someone else's submission
+    const other = await createUser(`test-sub-other-${Date.now()}@example.com`, 'TestPass123!', 'Other', 'Student', 'student')
+    testEmails.push(other.user!.email)
+    const wrongResult = await expireSubmission(submission!.id, other.user!.id)
+    const admin = getAdmin()
+    const { data: stillInProgress } = await admin.from('submissions').select('status').eq('id', submission!.id).single()
+    expect(stillInProgress!.status).toBe('in_progress')
+    expect(wrongResult.submission!.status).toBe('in_progress')
+
+    // Owning student expires successfully
+    const okResult = await expireSubmission(submission!.id, student.id)
+    expect(okResult.error).toBeNull()
+    expect(okResult.submission!.status).toBe('expired')
+    expect(okResult.submission!.score_total).not.toBeNull()
+  })
+
+  test('two racing submits transition exactly once (ticket 20.5)', async () => {
+    const { student, assessment } = await setupAssessment()
+    const questions = await getAssessmentQuestions(assessment.id)
+
+    const { submission } = await startSubmission(student.id, assessment.id)
+    await saveAnswer(submission!.id, questions[0].id, student.id, { selectedIndex: 1 })
+    await saveAnswer(submission!.id, questions[1].id, student.id, { value: true })
+
+    const [a, b] = await Promise.all([
+      submitAssessment(submission!.id, student.id),
+      submitAssessment(submission!.id, student.id),
+    ])
+
+    const winners = [a, b].filter((r) => r.error === null)
+    const losers = [a, b].filter((r) => r.error !== null)
+    expect(winners).toHaveLength(1)
+    expect(losers).toHaveLength(1)
+    expect(losers[0].error).toContain('already submitted')
+    expect(winners[0].submission!.status).toBe('submitted')
+
+    // The submission is graded once with the correct total (2 + 1 = 3).
+    const admin = getAdmin()
+    const { data: row } = await admin.from('submissions').select('status, score_total').eq('id', submission!.id).single()
+    expect(row!.status).toBe('submitted')
+    expect(row!.score_total).toBe(3)
+  })
+})
+
+describe('submit-vs-expire race', () => {
+  function getAdmin() {
+    return createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      { auth: { autoRefreshToken: false, persistSession: false } },
+    )
+  }
+
+  test('racing submit and expire transition exactly once and grade once', async () => {
+    const { student, assessment } = await setupAssessment()
+    const questions = await getAssessmentQuestions(assessment.id)
+
+    const { submission } = await startSubmission(student.id, assessment.id)
+    // Correct MC answer: 2 points.
+    await saveAnswer(submission!.id, questions[0].id, student.id, { selectedIndex: 1 })
+
+    const [submitRes, expireRes] = await Promise.all([
+      submitAssessment(submission!.id, student.id),
+      expireSubmission(submission!.id, student.id),
+    ])
+
+    // Exactly one caller wins the guarded transition; the other observed the
+    // winner's state and must not have double-run grading.
+    const admin = getAdmin()
+    const { data: row } = await admin.from('submissions').select('status, score_total').eq('id', submission!.id).single()
+    expect(['submitted', 'expired']).toContain(row!.status)
+    expect(row!.score_total).toBe(2)
+
+    if (submitRes.error === null) {
+      // Submit won: expire lost the guarded update and skipped grading.
+      expect(submitRes.submission!.status).toBe('submitted')
+      expect(expireRes.error).toBeNull()
+      expect(expireRes.submission!.status).toBe('submitted')
+      expect(expireRes.submission!.score_total).toBe(2)
+    } else {
+      // Expire won: the submit lost the race.
+      expect(submitRes.error).toContain('already submitted')
+      expect(expireRes.error).toBeNull()
+      expect(expireRes.submission!.status).toBe('expired')
+      expect(expireRes.submission!.score_total).toBe(2)
+    }
+  })
+
+  test('expireSubmission after a completed submit skips grading', async () => {
+    const { student, assessment } = await setupAssessment()
+    const questions = await getAssessmentQuestions(assessment.id)
+
+    const { submission } = await startSubmission(student.id, assessment.id)
+    await saveAnswer(submission!.id, questions[0].id, student.id, { selectedIndex: 1 })
+    await submitAssessment(submission!.id, student.id)
+
+    // The guarded update matches 0 rows (already submitted), so the expire
+    // observes the winner's state without grading again.
+    const result = await expireSubmission(submission!.id, student.id)
+
+    expect(result.error).toBeNull()
+    expect(result.submission!.status).toBe('submitted')
+    expect(result.submission!.score_total).toBe(2)
+  })
+})
+
+describe('enrollment and submission gating', () => {
+  test('starting a submission for a class the student is not enrolled in is rejected', async () => {
+    const { student, assessment } = await setupAssessment()
+
+    // Remove the enrollment, then attempt to start
+    const admin = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      { auth: { autoRefreshToken: false, persistSession: false } },
+    )
+    const { data: assessmentRow } = await admin.from('assessments').select('class_id').eq('id', assessment.id).single()
+    await admin.from('class_enrollments').delete().eq('student_id', student.id).eq('class_id', assessmentRow!.class_id)
+
+    const result = await startSubmission(student.id, assessment.id)
+
+    expect(result.error).toBeDefined()
+    expect(result.error).toContain('not enrolled')
+    expect(result.submission).toBeNull()
+  })
+
+  test('retakes are rejected while accepting_submissions is off', async () => {
+    const { instructor, student, assessment } = await setupAssessment()
+    const questions = await getAssessmentQuestions(assessment.id)
+
+    // Complete a first attempt
+    const { submission: first } = await startSubmission(student.id, assessment.id)
+    await saveAnswer(first!.id, questions[0].id, student.id, { selectedIndex: 1 })
+    await submitAssessment(first!.id, student.id)
+
+    // Enable retakes but turn off accepting submissions
+    await updateAssessmentSettings(assessment.id, instructor.id, {
+      retakes_allowed: true,
+      accepting_submissions: false,
+    })
+
+    const result = await startSubmission(student.id, assessment.id, { retake: true })
+
+    expect(result.error).toBeDefined()
+    expect(result.error).toContain('not currently accepting submissions')
+    expect(result.submission).toBeNull()
+  })
+
+  test('first attempt is rejected while accepting_submissions is off', async () => {
+    const { instructor, student, assessment } = await setupAssessment()
+
+    await updateAssessmentSettings(assessment.id, instructor.id, { accepting_submissions: false })
+
+    const result = await startSubmission(student.id, assessment.id)
+    expect(result.error).toBeDefined()
+    expect(result.error).toContain('not currently accepting submissions')
   })
 })

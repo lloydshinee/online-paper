@@ -158,6 +158,18 @@ create table public.live_sessions (
   started_at              timestamptz,
   ended_at                timestamptz,
   created_at              timestamptz not null default now(),
+  -- Ticket 16: previous index + advance timestamp so the write gate can
+  -- tolerate a flush of the immediately previous question for a short window.
+  prev_question_index     integer,
+  advanced_at             timestamptz,
+  -- Ticket 21 (F1/F2): per-question departure records
+  -- [{index, departed_at}]. The write gate accepts a save for question index
+  -- i when i is current or has an unexpired departure (now - departed_at <=
+  -- LIVE_ADVANCE_FLUSH_WINDOW_MS). Each departed question carries its own
+  -- window from its own departure, so rapid advances — or an advance chain
+  -- discovered late by polling — never shorten a question's flush window.
+  -- Truncated to non-expired entries on every advance.
+  flush_departures        jsonb,
   primary key (id)
 );
 alter table public.live_sessions enable row level security;
@@ -187,8 +199,85 @@ create table public.notifications (
 );
 alter table public.notifications enable row level security;
 
+-- live_session_members
+-- Explicit live session participation: a student may be a member of only one
+-- non-ended session at a time (enforced by a trigger below).
+create table public.live_session_members (
+  id          uuid not null default gen_random_uuid(),
+  session_id  uuid not null references public.live_sessions(id) on delete cascade,
+  student_id  uuid not null references public.users(id) on delete cascade,
+  joined_at   timestamptz not null default now(),
+  primary key (id),
+  unique (session_id, student_id)
+);
+alter table public.live_session_members enable row level security;
+
+create index live_session_members_student_idx on public.live_session_members (student_id);
+
 -- 4. Helper functions
 -- ---------------------------------------------------------------------------
+
+-- Atomically increment a submission's violation counter (proctoring).
+-- Returns the updated row only when the caller owns the submission and it is
+-- still in progress; otherwise returns no rows.
+create or replace function public.increment_violation(p_submission_id uuid, p_student_id uuid)
+returns table (violations int, status text, assessment_id uuid)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_owner uuid;
+  v_status text;
+begin
+  select public.submissions.student_id, public.submissions.status
+    into v_owner, v_status
+    from public.submissions where public.submissions.id = p_submission_id;
+  if not found then
+    return;
+  end if;
+  -- Ownership binding: only the submission's own student can record violations.
+  if v_owner <> p_student_id then
+    return;
+  end if;
+  -- Ignore submissions that are not in progress.
+  if v_status <> 'in_progress' then
+    return;
+  end if;
+
+  return query
+    update public.submissions
+      set violations = public.submissions.violations + 1
+      where public.submissions.id = p_submission_id
+      returning public.submissions.violations, public.submissions.status, public.submissions.assessment_id;
+end;
+$$;
+
+-- A student cannot participate in two overlapping (non-ended) live sessions.
+create or replace function public.check_live_membership_overlap()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if exists (
+    select 1
+    from public.live_session_members m
+    join public.live_sessions s on s.id = m.session_id
+    where m.student_id = new.student_id
+      and s.status <> 'ended'
+      and m.session_id <> new.session_id
+  ) then
+    raise exception 'Student is already a member of another live session';
+  end if;
+  return new;
+end;
+$$;
+
+create trigger trg_check_live_membership_overlap
+  before insert on public.live_session_members
+  for each row execute function public.check_live_membership_overlap();
 
 -- Auto-generate a 6-char join code
 create or replace function public.generate_join_code()

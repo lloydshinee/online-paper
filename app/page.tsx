@@ -62,7 +62,7 @@ export default function LandingPage() {
               <p className="mb-8 max-w-md text-[15px] leading-relaxed text-muted-foreground">
                 Write a quiz, share one link, and let the class join themselves
                 — no roster to build, no passwords to hand out. Grading happens
-                while you're pouring coffee.
+                while you&apos;re pouring coffee.
               </p>
               <div className="flex flex-wrap items-center justify-center sm:justify-start gap-3">
                 <Link
