@@ -1037,8 +1037,16 @@ export async function getStudentSubmissionResults(
   resultAnswers.sort((a, b) => (a.questions?.order_index ?? 0) - (b.questions?.order_index ?? 0))
 
   if (!assessment.answer_reveal_enabled) {
+    // Answer reveal gates ALL per-question grading data — not just the
+    // answer key. Per-question correctness (is_correct, points earned,
+    // feedback) is as revealing as the correct answer itself, so it must
+    // stay hidden until the instructor activates answer reveal, even after
+    // scores are released.
     resultAnswers = resultAnswers.map((a) => ({
       ...a,
+      score: null,
+      is_correct: null,
+      feedback: null,
       questions: {
         ...a.questions,
         content: sanitizeQuestionContent(a.questions.content),
@@ -1050,11 +1058,6 @@ export async function getStudentSubmissionResults(
 
   if (!assessment.scores_released) {
     resultSubmission = { ...resultSubmission, score_total: null }
-    resultAnswers = resultAnswers.map((a) => ({
-      ...a,
-      score: null,
-      is_correct: null,
-    }))
   }
 
   return {

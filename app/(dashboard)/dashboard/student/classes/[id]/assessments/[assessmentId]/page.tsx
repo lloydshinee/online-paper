@@ -618,8 +618,11 @@ export default function TakeAssessmentPage({
                 </div>
               )}
 
-              {/* Per-question breakdown: shown on release; answer reveal only
-                  gates the correct-answer column (server already strips it). */}
+              {/* Per-question breakdown: requires answer reveal, not just score
+                  release — per-question correctness is as revealing as the
+                  answers themselves. The server also strips per-question
+                  grading data until reveal is enabled. */}
+              {answersShown && (
               <div className="rounded-xl border border-border overflow-hidden">
                 <div className="border-b border-border px-6 py-4">
                   <p className="text-sm font-medium">Question Breakdown</p>
@@ -688,9 +691,10 @@ export default function TakeAssessmentPage({
                   </table>
                 </div>
               </div>
+              )}
 
               {/* Manual question details (Essay/Coding with feedback) */}
-              {resultAnswers.some((a) => (a.questions.type === 'Essay' || a.questions.type === 'Coding') && (a.feedback || a.score != null)) && (
+              {answersShown && resultAnswers.some((a) => (a.questions.type === 'Essay' || a.questions.type === 'Coding') && (a.feedback || a.score != null)) && (
                 <div className="rounded-xl border border-border mt-8">
                   <div className="border-b border-border px-6 py-4">
                     <p className="text-sm font-medium">Feedback</p>
