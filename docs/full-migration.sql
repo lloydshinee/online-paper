@@ -124,6 +124,7 @@ create table public.submissions (
   status        text not null default 'in_progress' check (status = any (array['in_progress', 'submitted', 'expired'])),
   score_total   integer,
   violations    integer not null default 0,
+  extra_seconds integer not null default 0,
   created_at    timestamptz default now(),
   primary key (id)
 );

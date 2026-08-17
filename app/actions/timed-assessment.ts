@@ -11,6 +11,9 @@ import {
   getActiveSubmission,
   recordViolation,
   expireSubmission,
+  extendSubmissionTime,
+  getSubmissionRemainingTime,
+  verifySubmissionOwnership,
 } from '@/lib/submission-service'
 import {
   getStudentAssessments as getStudentAssessmentsService,
@@ -65,13 +68,38 @@ export async function submitAssessmentAction(submissionId: string) {
   return submitAssessment(submissionId, auth.userId)
 }
 
-export async function expireAssessmentAction(submissionId: string) {
+export async function expireAssessmentAction(submissionId: string, force = false) {
   const auth = await authorize()
-  if ('error' in auth) return { error: auth.error, submission: null }
+  if ('error' in auth) {
+    return { error: auth.error, submission: null, overdue: true, remainingSeconds: 0, deadline: null }
+  }
 
   // Client auto-submit paths (timer zero, violation limit, resume-after-deadline)
   // must produce a submission with status `expired`, never `submitted`.
-  return expireSubmission(submissionId, auth.userId)
+  return expireSubmission(submissionId, auth.userId, { force })
+}
+
+export async function grantTimeAction(submissionId: string, minutes: number) {
+  const auth = await authorize(['instructor'])
+  if ('error' in auth) return { error: auth.error, submission: null }
+
+  if (!Number.isInteger(minutes) || minutes <= 0 || minutes > 1440) {
+    return { error: 'Minutes must be a positive integer no greater than 1440', submission: null }
+  }
+
+  const authorized = await verifySubmissionOwnership(auth.userId, submissionId)
+  if (!authorized) return { error: 'Not authorized', submission: null }
+
+  return extendSubmissionTime(submissionId, auth.userId, minutes)
+}
+
+export async function getRemainingTimeAction(submissionId: string) {
+  const auth = await authorize(['student'])
+  if ('error' in auth) {
+    return { error: auth.error, remainingSeconds: 0, extraSeconds: 0, overdue: true, deadline: null }
+  }
+
+  return getSubmissionRemainingTime(submissionId, auth.userId)
 }
 
 export async function getAssessmentData(assessmentId: string) {

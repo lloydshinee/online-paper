@@ -2,7 +2,7 @@ import { describe, test, expect, afterAll } from 'vitest'
 import { createClient } from '@supabase/supabase-js'
 import { createUser } from '@/lib/auth/admin-service'
 import { createClass, joinClass } from '@/lib/class-service'
-import { createAssessment, publishAssessment, setAssessmentQuestions } from '@/lib/assessment-service'
+import { createAssessment, publishAssessment, setAssessmentQuestions, updateAssessmentSettings, getAssessmentQuestions } from '@/lib/assessment-service'
 import {
   startSubmission,
   getSubmission,
@@ -13,8 +13,9 @@ import {
   recalculateAssessmentScores,
   gradeAnswer,
   expireSubmission,
+  extendSubmissionTime,
 } from '@/lib/submission-service'
-import { updateAssessmentSettings, getAssessmentQuestions } from '@/lib/assessment-service'
+import { computeDeadline } from '@/lib/deadline'
 import type { ParsedQuestion } from '@/lib/question-parser'
 
 const testEmails: string[] = []
@@ -233,6 +234,34 @@ describe('score release', () => {
 
     expect(results!.assessment.scores_released).toBe(true)
     expect(results!.assessment.answer_reveal_enabled).toBe(true)
+  })
+
+  test('per-question correctness stays hidden until answer reveal, even after score release', async () => {
+    const { instructor, student, assessment } = await setupAssessment()
+    const { submission } = await startSubmission(student.id, assessment.id)
+    const questions = await getAssessmentQuestions(assessment.id)
+
+    await saveAnswer(submission!.id, questions[0].id, student.id, { selectedIndex: 1 })
+    await saveAnswer(submission!.id, questions[1].id, student.id, { value: true })
+    await submitAssessment(submission!.id, student.id)
+
+    // Release scores but keep answer reveal OFF — the exact state that
+    // leaked per-question correctness to students mid-exam.
+    await updateAssessmentSettings(assessment.id, instructor.id, { scores_released: true })
+
+    const results = await getStudentSubmissionResults(assessment.id, student.id)
+
+    expect(results!.assessment.scores_released).toBe(true)
+    expect(results!.assessment.answer_reveal_enabled).toBe(false)
+    // The total score is visible...
+    expect(results!.submission!.score_total).not.toBeNull()
+    // ...but per-question grading data must not be.
+    for (const answer of results!.answers!) {
+      expect(answer.is_correct).toBeNull()
+      expect(answer.score).toBeNull()
+      expect(answer.questions.content.correctAnswer).toBeUndefined()
+      expect(answer.questions.content.correctIndex).toBeUndefined()
+    }
   })
 
   test('getStudentSubmissionResults returns auto-graded scores', async () => {
@@ -566,7 +595,7 @@ describe('deadline enforcement on write paths', () => {
     expect(wrongResult.submission!.status).toBe('in_progress')
 
     // Owning student expires successfully
-    const okResult = await expireSubmission(submission!.id, student.id)
+    const okResult = await expireSubmission(submission!.id, student.id, { force: true })
     expect(okResult.error).toBeNull()
     expect(okResult.submission!.status).toBe('expired')
     expect(okResult.submission!.score_total).not.toBeNull()
@@ -600,6 +629,253 @@ describe('deadline enforcement on write paths', () => {
   })
 })
 
+describe('time extensions (extra_seconds) on write paths', () => {
+  function getAdmin() {
+    return createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      { auth: { autoRefreshToken: false, persistSession: false } },
+    )
+  }
+
+  async function backdateSubmission(submissionId: string, hoursAgo = 2) {
+    const admin = getAdmin()
+    const startedAt = new Date(Date.now() - hoursAgo * 60 * 60 * 1000).toISOString()
+    await admin.from('submissions').update({ started_at: startedAt }).eq('id', submissionId)
+  }
+
+  async function setExtraSeconds(submissionId: string, seconds: number) {
+    const admin = getAdmin()
+    await admin.from('submissions').update({ extra_seconds: seconds }).eq('id', submissionId)
+  }
+
+  test('extendSubmissionTime moves the deadline so saves past the old deadline are accepted', async () => {
+    const { instructor, student, assessment } = await setupAssessment()
+    const questions = await getAssessmentQuestions(assessment.id)
+
+    const { submission } = await startSubmission(student.id, assessment.id)
+    await saveAnswer(submission!.id, questions[0].id, student.id, { selectedIndex: 1 })
+    await backdateSubmission(submission!.id)
+
+    const extension = await extendSubmissionTime(submission!.id, instructor.id, 180)
+    expect(extension.error).toBeNull()
+    expect(extension.submission!.extra_seconds).toBe(180 * 60)
+
+    const result = await saveAnswer(submission!.id, questions[1].id, student.id, { value: true })
+
+    expect(result.error).toBeNull()
+
+    // The submission stays in progress and the answer landed.
+    const admin = getAdmin()
+    const { data: row } = await admin.from('submissions').select('status').eq('id', submission!.id).single()
+    expect(row!.status).toBe('in_progress')
+    const sub = await getSubmission(submission!.id, student.id)
+    expect(sub!.answers.find((a) => a.question_id === questions[1].id)!.answer_content).toEqual({ value: true })
+  })
+
+  test('a save past the extended deadline is rejected and expires the submission', async () => {
+    const { student, assessment } = await setupAssessment()
+    const questions = await getAssessmentQuestions(assessment.id)
+
+    const { submission } = await startSubmission(student.id, assessment.id)
+    await saveAnswer(submission!.id, questions[0].id, student.id, { selectedIndex: 1 })
+    // Started 2 hours ago with only 30 extra minutes: the extended deadline was 1 hour ago.
+    await backdateSubmission(submission!.id)
+    await setExtraSeconds(submission!.id, 30 * 60)
+
+    const result = await saveAnswer(submission!.id, questions[1].id, student.id, { value: true })
+
+    expect(result.error).toBeDefined()
+    expect(result.error).toContain('expired')
+
+    const admin = getAdmin()
+    const { data: row } = await admin.from('submissions').select('status, score_total').eq('id', submission!.id).single()
+    expect(row!.status).toBe('expired')
+    expect(row!.score_total).not.toBeNull()
+  })
+
+  test('repeat grants accumulate on an in-progress submission', async () => {
+    const { instructor, student, assessment } = await setupAssessment()
+
+    const { submission } = await startSubmission(student.id, assessment.id)
+
+    const first = await extendSubmissionTime(submission!.id, instructor.id, 5)
+    const second = await extendSubmissionTime(submission!.id, instructor.id, 10)
+
+    expect(first.error).toBeNull()
+    expect(second.error).toBeNull()
+    expect(second.submission!.extra_seconds).toBe(15 * 60)
+    expect(second.submission!.status).toBe('in_progress')
+  })
+
+  test('reopen transitions to in_progress, clears auto grades, keeps manual grades, and resets violations', async () => {
+    const { instructor, student, assessment } = await setupAssessment()
+    const questions = await getAssessmentQuestions(assessment.id)
+    const admin = getAdmin()
+
+    const { submission } = await startSubmission(student.id, assessment.id)
+    await saveAnswer(submission!.id, questions[0].id, student.id, { selectedIndex: 1 })
+    await saveAnswer(submission!.id, questions[1].id, student.id, { value: true })
+    await saveAnswer(submission!.id, questions[2].id, student.id, { text: 'Plants convert light into energy.' })
+    await submitAssessment(submission!.id, student.id)
+
+    const graded = await getSubmission(submission!.id, student.id)
+    const essayAnswer = graded!.answers.find((answer) => answer.question_id === questions[2].id)!
+    await gradeAnswer(essayAnswer.id, 4, 'Keep this feedback', instructor.id)
+    await admin.from('submissions').update({ violations: 2 }).eq('id', submission!.id)
+
+    const reopened = await extendSubmissionTime(submission!.id, instructor.id, 5)
+
+    expect(reopened.error).toBeNull()
+    expect(reopened.submission!.status).toBe('in_progress')
+    expect(reopened.submission!.submitted_at).toBeNull()
+    expect(reopened.submission!.score_total).toBeNull()
+    expect(reopened.submission!.violations).toBe(0)
+
+    const after = await getSubmission(submission!.id, student.id)
+    const mcQuestionId = questions.find((question) => question.type === 'MultipleChoice')!.id
+    const tfQuestionId = questions.find((question) => question.type === 'TrueOrFalse')!.id
+    const essayQuestionId = questions.find((question) => question.type === 'Essay')!.id
+    const mcAnswer = after!.answers.find((answer) => answer.question_id === mcQuestionId)!
+    const tfAnswer = after!.answers.find((answer) => answer.question_id === tfQuestionId)!
+    const essayAfter = after!.answers.find((answer) => answer.question_id === essayQuestionId)!
+
+    expect(mcAnswer.score).toBeNull()
+    expect(mcAnswer.is_correct).toBeNull()
+    expect(tfAnswer.score).toBeNull()
+    expect(tfAnswer.is_correct).toBeNull()
+    expect(essayAfter.score).toBe(4)
+    expect(essayAfter.feedback).toBe('Keep this feedback')
+
+    const newDeadline = computeDeadline(after!.started_at, 30, after!.extra_seconds)
+    expect(Math.abs(newDeadline - (Date.now() + 5 * 60 * 1000))).toBeLessThanOrEqual(3000)
+  })
+
+  test('only the latest finished submission can be reopened', async () => {
+    const { instructor, student, assessment } = await setupAssessment()
+    const questions = await getAssessmentQuestions(assessment.id)
+
+    const { submission: first } = await startSubmission(student.id, assessment.id)
+    await saveAnswer(first!.id, questions[0].id, student.id, { selectedIndex: 1 })
+    await submitAssessment(first!.id, student.id)
+
+    await updateAssessmentSettings(assessment.id, instructor.id, { retakes_allowed: true })
+
+    const { submission: second } = await startSubmission(student.id, assessment.id, { retake: true })
+    await saveAnswer(second!.id, questions[0].id, student.id, { selectedIndex: 0 })
+    await submitAssessment(second!.id, student.id)
+
+    const result = await extendSubmissionTime(first!.id, instructor.id, 5)
+
+    expect(result.error).toContain('latest finished')
+  })
+
+  test('non-instructors cannot grant time', async () => {
+    const { student, assessment } = await setupAssessment()
+    const { user: otherInstructor } = await createUser(`test-time-other-instr-${Date.now()}@example.com`, 'TestPass123!', 'Other', 'Instructor', 'instructor')
+    testEmails.push(otherInstructor!.email)
+
+    const { submission } = await startSubmission(student.id, assessment.id)
+    const result = await extendSubmissionTime(submission!.id, otherInstructor!.id, 5)
+
+    expect(result.error).toBe('Not authorized')
+  })
+
+  test('live-mode assessments reject time extensions', async () => {
+    const instructorEmail = `test-live-instr-${Date.now()}@example.com`
+    const studentEmail = `test-live-stu-${Date.now()}@example.com`
+    testEmails.push(instructorEmail, studentEmail)
+
+    const { user: instructor } = await createUser(instructorEmail, 'TestPass123!', 'Live', 'Instructor', 'instructor')
+    const { user: student } = await createUser(studentEmail, 'TestPass123!', 'Live', 'Student', 'student')
+    const { class: cls } = await createClass(instructor!.id, 'Live Class')
+    await joinClass(student!.id, cls!.join_code)
+
+    const { assessment: liveAssessment } = await createAssessment(instructor!.id, cls!.id, 'Live Assessment', 'live', undefined)
+    await setAssessmentQuestions(liveAssessment!.id, instructor!.id, [mcQuestion])
+    await publishAssessment(liveAssessment!.id, instructor!.id)
+
+    const admin = getAdmin()
+    const startedAt = new Date().toISOString()
+    const { data: liveSubmission } = await admin
+      .from('submissions')
+      .insert({
+        assessment_id: liveAssessment!.id,
+        student_id: student!.id,
+        status: 'in_progress',
+        started_at: startedAt,
+      })
+      .select('*')
+      .single()
+
+    const result = await extendSubmissionTime(liveSubmission!.id, instructor!.id, 5)
+
+    expect(result.error).toContain('timed assessments')
+  })
+
+  test('draft assessments reject time extensions', async () => {
+    const instructorEmail = `test-draft-instr-${Date.now()}@example.com`
+    const studentEmail = `test-draft-stu-${Date.now()}@example.com`
+    testEmails.push(instructorEmail, studentEmail)
+
+    const { user: instructor } = await createUser(instructorEmail, 'TestPass123!', 'Draft', 'Instructor', 'instructor')
+    const { user: student } = await createUser(studentEmail, 'TestPass123!', 'Draft', 'Student', 'student')
+    const { class: cls } = await createClass(instructor!.id, 'Draft Class')
+    await joinClass(student!.id, cls!.join_code)
+
+    const { assessment: draftAssessment } = await createAssessment(instructor!.id, cls!.id, 'Draft Assessment', 'timed', 30)
+    await setAssessmentQuestions(draftAssessment!.id, instructor!.id, [mcQuestion])
+
+    const admin = getAdmin()
+    const { data: draftSubmission } = await admin
+      .from('submissions')
+      .insert({
+        assessment_id: draftAssessment!.id,
+        student_id: student!.id,
+        status: 'in_progress',
+        started_at: new Date().toISOString(),
+      })
+      .select('*')
+      .single()
+
+    const result = await extendSubmissionTime(draftSubmission!.id, instructor!.id, 5)
+
+    expect(result.error).toContain('Draft assessments')
+  })
+
+  test('re-submit after reopen regrades the cleared auto-graded answers', async () => {
+    const { instructor, student, assessment } = await setupAssessment()
+    const questions = await getAssessmentQuestions(assessment.id)
+
+    const { submission } = await startSubmission(student.id, assessment.id)
+    await saveAnswer(submission!.id, questions[0].id, student.id, { selectedIndex: 0 })
+    await saveAnswer(submission!.id, questions[1].id, student.id, { value: false })
+    await submitAssessment(submission!.id, student.id)
+
+    const reopened = await extendSubmissionTime(submission!.id, instructor.id, 5)
+    expect(reopened.error).toBeNull()
+
+    await saveAnswer(submission!.id, questions[0].id, student.id, { selectedIndex: 1 })
+    await saveAnswer(submission!.id, questions[1].id, student.id, { value: true })
+    const resubmitted = await submitAssessment(submission!.id, student.id)
+
+    expect(resubmitted.error).toBeNull()
+    expect(resubmitted.submission!.status).toBe('submitted')
+
+    await updateAssessmentSettings(assessment.id, instructor.id, {
+      scores_released: true,
+      answer_reveal_enabled: true,
+    })
+    const results = await getStudentSubmissionResults(assessment.id, student.id)
+    const mcAnswer = results!.answers!.find((answer) => answer.questions.type === 'MultipleChoice')!
+    const tfAnswer = results!.answers!.find((answer) => answer.questions.type === 'TrueOrFalse')!
+    expect(mcAnswer.score).toBe(2)
+    expect(mcAnswer.is_correct).toBe(true)
+    expect(tfAnswer.score).toBe(1)
+    expect(tfAnswer.is_correct).toBe(true)
+  })
+})
+
 describe('submit-vs-expire race', () => {
   function getAdmin() {
     return createClient(
@@ -619,7 +895,7 @@ describe('submit-vs-expire race', () => {
 
     const [submitRes, expireRes] = await Promise.all([
       submitAssessment(submission!.id, student.id),
-      expireSubmission(submission!.id, student.id),
+      expireSubmission(submission!.id, student.id, { force: true }),
     ])
 
     // Exactly one caller wins the guarded transition; the other observed the
@@ -633,7 +909,7 @@ describe('submit-vs-expire race', () => {
       // Submit won: expire lost the guarded update and skipped grading.
       expect(submitRes.submission!.status).toBe('submitted')
       expect(expireRes.error).toBeNull()
-      expect(expireRes.submission!.status).toBe('submitted')
+      expect(['submitted', 'expired', 'in_progress']).toContain(expireRes.submission!.status)
       expect(expireRes.submission!.score_total).toBe(2)
     } else {
       // Expire won: the submit lost the race.

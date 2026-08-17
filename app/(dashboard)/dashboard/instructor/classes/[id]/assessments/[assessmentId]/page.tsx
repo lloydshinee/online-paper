@@ -149,7 +149,7 @@ export default function AssessmentPage({
             onDelete={handleDelete}
           />
         )}
-        {tab === 'submissions' && <SubmissionsTab assessmentId={assessmentId} />}
+        {tab === 'submissions' && <SubmissionsTab assessmentId={assessmentId} assessmentMode={assessment.mode} />}
       </main>
     </div>
   )

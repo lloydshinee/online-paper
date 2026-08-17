@@ -48,4 +48,23 @@ describe('deadline math', () => {
     const now = new Date('2026-01-01T10:00:30.500Z').getTime()
     expect(remainingSeconds(deadline, now)).toBe(30)
   })
+
+  test('extra_seconds shifts the deadline past the original duration', () => {
+    const startedAt = new Date('2026-01-01T10:00:00.000Z')
+    const deadline = computeDeadline(startedAt, 30, 5 * 60)
+    expect(deadline).toBe(new Date('2026-01-01T10:35:00.000Z').getTime())
+  })
+
+  test('extra_seconds defaults to zero: unextended attempts are unchanged', () => {
+    const startedAt = new Date('2026-01-01T10:00:00.000Z')
+    expect(computeDeadline(startedAt, 30)).toBe(computeDeadline(startedAt, 30, 0))
+  })
+
+  test('remaining time reflects the extended deadline after the original one passed', () => {
+    const startedAt = new Date('2026-01-01T10:00:00.000Z')
+    const deadline = computeDeadline(startedAt, 30, 10 * 60)
+    const now = new Date('2026-01-01T10:35:00.000Z').getTime()
+    expect(remainingSeconds(deadline, now)).toBe(5 * 60)
+    expect(isPastDeadline(deadline, now)).toBe(false)
+  })
 })

@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, use, useRef, type ReactNode } from 'react'
 import { flushSync } from 'react-dom'
 import { useSearchParams, useRouter } from 'next/navigation'
-import { startAssessmentAction, saveAnswerAction, submitAssessmentAction, expireAssessmentAction, getAssessmentData, getSubmissionResultsAction, getSubmissionHistoryAction, getActiveSubmissionAction, recordViolationAction } from '@/app/actions/timed-assessment'
+import { startAssessmentAction, saveAnswerAction, submitAssessmentAction, expireAssessmentAction, getAssessmentData, getSubmissionResultsAction, getSubmissionHistoryAction, getActiveSubmissionAction, recordViolationAction, getRemainingTimeAction } from '@/app/actions/timed-assessment'
 import { Clock, Lightbulb, ChevronLeft, ChevronRight, CheckCircle, XCircle, Clock3, AlertCircle, AlertTriangle, RotateCcw, Loader2 } from 'lucide-react'
 import { computeDeadline, remainingSeconds } from '@/lib/deadline'
 import DashboardHeader from '@/components/dashboard-header'
@@ -71,6 +71,7 @@ interface SubmissionHistoryItem {
 }
 
 const AUTOSAVE_DEBOUNCE_MS = 600
+const REMAINING_TIME_POLL_MS = 10_000
 
 export default function TakeAssessmentPage({
   params: paramsPromise,
@@ -94,6 +95,7 @@ export default function TakeAssessmentPage({
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [extensionBanner, setExtensionBanner] = useState<string | null>(null)
   const [showConfirm, setShowConfirm] = useState(false)
   const [results, setResults] = useState<SubmissionResult | null>(null)
   const [resultsUnavailable, setResultsUnavailable] = useState(false)
@@ -109,10 +111,65 @@ export default function TakeAssessmentPage({
   const latestAnswersRef = useRef<Record<string, Record<string, unknown>>>({})
   const saveTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const saveChainsRef = useRef<Record<string, Promise<void>>>({})
+  const pollingRef = useRef(false)
+  const bannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     submittedRef.current = submitted
   }, [submitted])
+
+  useEffect(() => {
+    return () => {
+      if (bannerTimerRef.current) {
+        clearTimeout(bannerTimerRef.current)
+      }
+    }
+  }, [])
+
+  const showExtensionBanner = useCallback((secondsAdded: number) => {
+    const minutesAdded = Math.max(1, Math.round(secondsAdded / 60))
+    setExtensionBanner(`Instructor added ${minutesAdded} min`)
+    if (bannerTimerRef.current) {
+      clearTimeout(bannerTimerRef.current)
+    }
+    bannerTimerRef.current = setTimeout(() => {
+      setExtensionBanner(null)
+      bannerTimerRef.current = null
+    }, 4000)
+  }, [])
+
+  const showResumeExtensionBanner = useCallback(() => {
+    setExtensionBanner('Instructor added time')
+    if (bannerTimerRef.current) {
+      clearTimeout(bannerTimerRef.current)
+    }
+    bannerTimerRef.current = setTimeout(() => {
+      setExtensionBanner(null)
+      bannerTimerRef.current = null
+    }, 4000)
+  }, [])
+
+  const adoptServerRemainingTime = useCallback((deadline: number, remaining: number, extraSeconds: number) => {
+    if (!assessment?.duration_minutes || !submissionIdRef.current) return false
+
+    const currentDeadline = deadlineRef.current
+
+    if (currentDeadline != null && deadline <= currentDeadline) {
+      return false
+    }
+
+    const currentRemaining = currentDeadline == null ? 0 : remainingSeconds(currentDeadline, Date.now())
+    deadlineRef.current = deadline
+    setTimeLeft(remaining)
+
+    if (currentDeadline != null) {
+      showExtensionBanner(remaining - currentRemaining)
+    } else if (extraSeconds > 0) {
+      showExtensionBanner(extraSeconds)
+    }
+
+    return true
+  }, [assessment?.duration_minutes, showExtensionBanner])
 
   const goToResults = useCallback(async () => {
     const result = await getSubmissionResultsAction(assessmentId)
@@ -130,20 +187,42 @@ export default function TakeAssessmentPage({
 
   // Auto-expire paths: timer zero, violation limit, resume-after-deadline,
   // or a server-side expiry detected by a rejected save.
-  const autoExpire = useCallback(async () => {
+  const autoExpire = useCallback(async (opts?: { force?: boolean }) => {
     if (autoExpiringRef.current) return
     autoExpiringRef.current = true
-    setSubmitted(true)
     const subId = submissionIdRef.current
+    let shouldGoToResults = true
+
     if (subId) {
-      const result = await expireAssessmentAction(subId)
+      const result = await expireAssessmentAction(subId, opts?.force === true)
+
+      if (result?.overdue === false) {
+        autoExpiringRef.current = false
+        if (result.deadline != null) {
+          adoptServerRemainingTime(result.deadline, result.remainingSeconds ?? 0, result.submission?.extra_seconds ?? 0)
+        }
+        return
+      }
+
+      setSubmitted(true)
+
       if (result?.error) {
-        // Fall back to a regular submit so the student is not stuck.
-        await submitAssessmentAction(subId)
+        if (opts?.force) {
+          await submitAssessmentAction(subId)
+        } else {
+          shouldGoToResults = false
+          setSubmitError(result.error)
+          setSubmitted(false)
+        }
       }
     }
-    await goToResults()
-  }, [goToResults])
+
+    if (shouldGoToResults) {
+      await goToResults()
+    }
+
+    autoExpiringRef.current = false
+  }, [adoptServerRemainingTime, goToResults])
 
   // ------------------------------------------------------------------
   // Autosave: debounced per question, serialized per question.
@@ -205,8 +284,55 @@ export default function TakeAssessmentPage({
     initRef.current = true
     async function init() {
       try {
-        // First check if the student has a prior submitted/expired submission
-        // (skip if this is a retake attempt).
+        // Check if the student has an in-progress submission (resume).
+        const active = await getActiveSubmissionAction(assessmentId)
+        if (active) {
+          const data = await getAssessmentData(assessmentId)
+          if (!data || data.error || !data.assessment) {
+            setError(data?.error ?? 'Assessment not found')
+            setLoading(false)
+            return
+          }
+          setAssessment(data.assessment)
+          setQuestions(data.questions)
+          setSubmissionId(active.id)
+          submissionIdRef.current = active.id
+
+          // Restore saved answers
+          const savedAnswers: Record<string, Record<string, unknown>> = {}
+          for (const a of active.answers) {
+            savedAnswers[a.question_id] = a.answer_content
+          }
+          setAnswers(savedAnswers)
+          latestAnswersRef.current = savedAnswers
+
+          // Seed the violation counter from the server value (resume).
+          violationsRef.current = active.violations ?? 0
+          setViolations(active.violations ?? 0)
+
+          // Compute the true deadline from started_at + duration + extra_seconds.
+          if (data.timeLimit) {
+            const deadline = computeDeadline(active.started_at, data.timeLimit, active.extra_seconds ?? 0)
+            deadlineRef.current = deadline
+            const remaining = remainingSeconds(deadline, Date.now())
+            setTimeLeft(remaining)
+            if ((active.extra_seconds ?? 0) > 0) {
+              showResumeExtensionBanner()
+            }
+            if (remaining <= 0) {
+              // Resume after the deadline: auto-expire, never a manual submit.
+              await autoExpire()
+              return
+            }
+          }
+
+          setViewMode('take')
+          setLoading(false)
+          return
+        }
+
+        // No active submission: fall back to the latest finished one unless
+        // this visit is explicitly starting a retake.
         if (!isRetake) {
           const result = await getSubmissionResultsAction(assessmentId)
 
@@ -227,49 +353,6 @@ export default function TakeAssessmentPage({
             setLoading(false)
             return
           }
-        }
-
-        // Check if the student has an in-progress submission (resume).
-        const active = await getActiveSubmissionAction(assessmentId)
-        if (active) {
-          const data = await getAssessmentData(assessmentId)
-          if (!data || data.error || !data.assessment) {
-            setError(data?.error ?? 'Assessment not found')
-            setLoading(false)
-            return
-          }
-          setAssessment(data.assessment)
-          setQuestions(data.questions)
-          setSubmissionId(active.id)
-
-          // Restore saved answers
-          const savedAnswers: Record<string, Record<string, unknown>> = {}
-          for (const a of active.answers) {
-            savedAnswers[a.question_id] = a.answer_content
-          }
-          setAnswers(savedAnswers)
-          latestAnswersRef.current = savedAnswers
-
-          // Seed the violation counter from the server value (resume).
-          violationsRef.current = active.violations ?? 0
-          setViolations(active.violations ?? 0)
-
-          // Compute the true deadline from started_at + duration.
-          if (data.timeLimit) {
-            const deadline = computeDeadline(active.started_at, data.timeLimit)
-            deadlineRef.current = deadline
-            const remaining = remainingSeconds(deadline, Date.now())
-            setTimeLeft(remaining)
-            if (remaining <= 0) {
-              // Resume after the deadline: auto-expire, never a manual submit.
-              await autoExpire()
-              return
-            }
-          }
-
-          setViewMode('take')
-          setLoading(false)
-          return
         }
 
         // No prior submission — load assessment for taking.
@@ -297,6 +380,7 @@ export default function TakeAssessmentPage({
         const startResult = await startAssessmentAction(assessmentId, isRetake)
         if (startResult.submissionId) {
           setSubmissionId(startResult.submissionId)
+          submissionIdRef.current = startResult.submissionId
           setViewMode('take')
           setLoading(false)
         } else {
@@ -337,6 +421,32 @@ export default function TakeAssessmentPage({
     }
   }, [timeLeft, viewMode, submitted, submissionId, autoExpire])
 
+  useEffect(() => {
+    if (viewMode !== 'take' || submitted || !submissionId) return
+
+    const pollRemaining = async () => {
+      if (pollingRef.current || submitting || autoExpiringRef.current) return
+      pollingRef.current = true
+
+      try {
+        const result = await getRemainingTimeAction(submissionId)
+        if (!result?.error && result.overdue === false) {
+          if (result.deadline != null) {
+            adoptServerRemainingTime(result.deadline, result.remainingSeconds, result.extraSeconds)
+          }
+        }
+      } finally {
+        pollingRef.current = false
+      }
+    }
+
+    const timer = setInterval(() => {
+      void pollRemaining()
+    }, REMAINING_TIME_POLL_MS)
+
+    return () => clearInterval(timer)
+  }, [adoptServerRemainingTime, submissionId, submitted, submitting, viewMode])
+
   // ------------------------------------------------------------------
   // Proctoring: seeded from the server, synced to the server count.
   // ------------------------------------------------------------------
@@ -365,7 +475,7 @@ export default function TakeAssessmentPage({
       }
 
       if (next >= maxViolations) {
-        autoExpire()
+        autoExpire({ force: true })
       }
     }
 
@@ -818,6 +928,15 @@ export default function TakeAssessmentPage({
           <div className="rounded-md bg-yellow-100 dark:bg-yellow-900/20 px-4 py-3 flex items-center gap-2">
             <AlertTriangle size={16} className="text-yellow-700 dark:text-yellow-400 shrink-0" />
             <p className="text-sm text-yellow-700 dark:text-yellow-400">{saveError}</p>
+          </div>
+        </div>
+      )}
+
+      {extensionBanner && (
+        <div className="mx-auto max-w-4xl px-6 pt-4">
+          <div className="rounded-md bg-blue-100 dark:bg-blue-900/20 px-4 py-3 flex items-center gap-2">
+            <Clock3 size={16} className="text-blue-700 dark:text-blue-400 shrink-0" />
+            <p className="text-sm text-blue-700 dark:text-blue-400">{extensionBanner}</p>
           </div>
         </div>
       )}

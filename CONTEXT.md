@@ -31,8 +31,12 @@ A single item within an assessment. Each question has a point value assigned by 
 _Avoid_: Item, problem, prompt
 
 **Submission**:
-A student's attempt at an assessment, tracked through three statuses: In Progress (student has started but not yet submitted; answers auto-save), Submitted (student clicked Submit; triggers auto-grading; immutable), and Expired (timer ran out and the system auto-submitted). A student can have multiple submissions for the same assessment via retakes; the latest submitted/expired submission is the authoritative score.
+A student's attempt at an assessment, tracked through three statuses: In Progress (student has started but not yet submitted; answers auto-save), Submitted (student clicked Submit; triggers auto-grading), and Expired (timer ran out and the system auto-submitted). A student can have multiple submissions for the same assessment via retakes; the latest submitted/expired submission is the authoritative score.
 _Avoid_: Attempt, response set, paper
+
+**Time Extension**:
+An instructor-granted addition of minutes to a specific student's attempt on a timed assessment. Either extends an In Progress attempt's deadline or re-opens the student's latest finished attempt. Accumulated per attempt as `extra_seconds`; the effective deadline is `started_at + duration_minutes + extra_seconds`.
+_Avoid_: Extra time, grace period, deadline adjustment
 
 **Retake**:
 A subsequent submission for an already-completed assessment. The instructor controls whether retakes are allowed per assessment. Each retake creates a brand-new submission row while preserving all previous submissions and their answers. An instructor may also force a retake by deleting a specific student's submission.
@@ -53,11 +57,11 @@ Student has started the assessment but has not yet submitted. Answers are saved 
 _Avoid_: Active, open, ongoing
 
 **Submitted**:
-Student clicked the Submit button. Auto-grading runs immediately. Answers cannot be modified after this point. Equivalent to Expired for results display purposes.
+Student clicked the Submit button. Auto-grading runs immediately. Answers cannot be modified after this point, but the instructor may re-open the student's latest finished attempt via a Time Extension. Equivalent to Expired for results display purposes.
 _Avoid_: Completed, finished, turned in
 
 **Expired**:
-The countdown timer reached zero and the system auto-submitted the student's answers. Auto-grading runs immediately. Treated identically to Submitted for results display.
+The countdown timer reached zero and the system auto-submitted the student's answers. Auto-grading runs immediately. Treated identically to Submitted for results display. Like Submitted, the instructor may re-open the student's latest finished attempt via a Time Extension.
 
 ## Live session
 

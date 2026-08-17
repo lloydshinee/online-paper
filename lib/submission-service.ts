@@ -1,5 +1,6 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { questionTypeRegistry } from '@/lib/question-types/registry'
+import { computeDeadline, remainingSeconds } from '@/lib/deadline'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 export interface SubmissionData {
@@ -11,6 +12,7 @@ export interface SubmissionData {
   status: 'in_progress' | 'submitted' | 'expired'
   score_total: number | null
   violations: number
+  extra_seconds: number
 }
 
 export interface AnswerData {
@@ -39,10 +41,34 @@ export interface SubmissionWithAnswers extends SubmissionData {
 interface SubmissionResult {
   submission: SubmissionData | null
   error: string | null
+  remainingSeconds?: number
+  overdue?: boolean
+  deadline?: number
 }
 
 interface AnswerResult {
   error: string | null
+}
+
+interface RemainingTimeResult {
+  error: string | null
+  remainingSeconds: number
+  extraSeconds: number
+  overdue: boolean
+  deadline: number | null
+}
+
+interface SubmissionTimingAssessment {
+  duration_minutes: number | null
+  mode: string
+  state?: string
+  class_id?: string
+}
+
+interface DeadlineState {
+  deadline: number
+  remainingSeconds: number
+  overdue: boolean
 }
 
 export async function startSubmission(
@@ -206,7 +232,7 @@ export async function saveAnswer(
 
   const { data: submission } = await supabase
     .from('submissions')
-    .select('id, status, assessment_id, started_at')
+    .select('id, status, assessment_id, started_at, extra_seconds')
     .eq('id', submissionId)
     .eq('student_id', studentId)
     .single()
@@ -251,7 +277,7 @@ export async function submitAssessment(
 
   const { data: submission } = await supabase
     .from('submissions')
-    .select('id, status, assessment_id, started_at')
+    .select('id, status, assessment_id, started_at, extra_seconds')
     .eq('id', submissionId)
     .eq('student_id', studentId)
     .single()
@@ -308,8 +334,39 @@ export async function submitAssessment(
 export async function expireSubmission(
   submissionId: string,
   studentId?: string,
+  opts?: { force?: boolean },
 ): Promise<SubmissionResult> {
   const supabase = createServiceClient()
+
+  if (!opts?.force) {
+    let existingQuery = supabase
+      .from('submissions')
+      .select('*')
+      .eq('id', submissionId)
+
+    if (studentId) {
+      existingQuery = existingQuery.eq('student_id', studentId)
+    }
+
+    const { data: existing } = await existingQuery.maybeSingle()
+
+    if (existing?.status === 'in_progress') {
+      const assessment = await getSubmissionTimingAssessment(supabase, existing.assessment_id)
+      const deadlineState = assessment && assessment.mode === 'timed' && assessment.duration_minutes
+        ? getDeadlineState(existing.started_at, assessment.duration_minutes, existing.extra_seconds ?? 0)
+        : null
+
+      if (deadlineState && !deadlineState.overdue) {
+        return {
+          submission: existing as SubmissionData,
+          error: null,
+          remainingSeconds: deadlineState.remainingSeconds,
+          overdue: false,
+          deadline: deadlineState.deadline,
+        }
+      }
+    }
+  }
 
   let updateQuery = supabase
     .from('submissions')
@@ -345,6 +402,193 @@ export async function expireSubmission(
     .single()
 
   return { submission: updated as SubmissionData, error: null }
+}
+
+export async function extendSubmissionTime(
+  submissionId: string,
+  grantorUserId: string,
+  minutes: number,
+): Promise<SubmissionResult> {
+  if (!Number.isInteger(minutes) || minutes <= 0) {
+    return { submission: null, error: 'Minutes must be a positive integer' }
+  }
+
+  const supabase = createServiceClient()
+  const grantedSeconds = minutes * 60
+
+  const { data: submission } = await supabase
+    .from('submissions')
+    .select('*')
+    .eq('id', submissionId)
+    .single()
+
+  if (!submission) {
+    return { submission: null, error: 'Submission not found' }
+  }
+
+  const assessment = await getSubmissionTimingAssessment(supabase, submission.assessment_id)
+  if (!assessment || assessment.mode !== 'timed' || !assessment.duration_minutes) {
+    return { submission: null, error: 'Time extensions are only available for timed assessments' }
+  }
+
+  if (assessment.state === 'draft') {
+    return { submission: null, error: 'Draft assessments cannot receive time extensions' }
+  }
+
+  const { data: owningClass } = await supabase
+    .from('classes')
+    .select('id')
+    .eq('id', assessment.class_id!)
+    .eq('instructor_id', grantorUserId)
+    .single()
+
+  if (!owningClass) {
+    return { submission: null, error: 'Not authorized' }
+  }
+
+  const { data: currentInProgress } = await supabase
+    .from('submissions')
+    .select('id')
+    .eq('student_id', submission.student_id)
+    .eq('assessment_id', submission.assessment_id)
+    .eq('status', 'in_progress')
+    .maybeSingle()
+
+  if (submission.status === 'in_progress') {
+    if (currentInProgress?.id !== submission.id) {
+      return { submission: null, error: 'Only the current in-progress submission can be extended' }
+    }
+
+    const { data: updated, error } = await supabase
+      .from('submissions')
+      .update({ extra_seconds: (submission.extra_seconds ?? 0) + grantedSeconds })
+      .eq('id', submission.id)
+      .select('*')
+      .single()
+
+    if (error) {
+      return { submission: null, error: error.message }
+    }
+
+    return { submission: updated as SubmissionData, error: null }
+  }
+
+  if (submission.status !== 'submitted' && submission.status !== 'expired') {
+    return { submission: null, error: 'Submission is not eligible for a time extension' }
+  }
+
+  const { data: latestFinished } = await supabase
+    .from('submissions')
+    .select('id')
+    .eq('student_id', submission.student_id)
+    .eq('assessment_id', submission.assessment_id)
+    .in('status', ['submitted', 'expired'])
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (latestFinished?.id !== submission.id) {
+    return { submission: null, error: 'Only the latest finished submission can be reopened' }
+  }
+
+  if (currentInProgress && currentInProgress.id !== submission.id) {
+    return { submission: null, error: 'The student already has an in-progress submission' }
+  }
+
+  const oldDeadline = computeDeadline(submission.started_at, assessment.duration_minutes, submission.extra_seconds ?? 0)
+  const now = Date.now()
+  const newExtraSeconds = (submission.extra_seconds ?? 0) + Math.floor((now - oldDeadline) / 1000) + grantedSeconds
+
+  const { data: transitioned, error: transitionError } = await supabase
+    .from('submissions')
+    .update({
+      status: 'in_progress',
+      submitted_at: null,
+      score_total: null,
+      violations: 0,
+      extra_seconds: newExtraSeconds,
+    })
+    .eq('id', submission.id)
+    .eq('status', submission.status)
+    .select('*')
+    .maybeSingle()
+
+  if (transitionError) {
+    return { submission: null, error: transitionError.message }
+  }
+
+  if (!transitioned || transitioned.status !== 'in_progress') {
+    return { submission: null, error: 'Submission is no longer eligible for reopening' }
+  }
+
+  const { data: autoQuestions } = await supabase
+    .from('questions')
+    .select('id')
+    .eq('assessment_id', submission.assessment_id)
+    .in('type', ['MultipleChoice', 'TrueOrFalse', 'FillInTheBlank'])
+
+  const autoQuestionIds = (autoQuestions ?? []).map((question) => question.id)
+  if (autoQuestionIds.length > 0) {
+    const { error: answerError } = await supabase
+      .from('answers')
+      .update({ is_correct: null, score: null })
+      .eq('submission_id', submission.id)
+      .in('question_id', autoQuestionIds)
+
+    if (answerError) {
+      return { submission: null, error: answerError.message }
+    }
+  }
+
+  return { submission: transitioned as SubmissionData, error: null }
+}
+
+export async function getSubmissionRemainingTime(
+  submissionId: string,
+  studentId: string,
+): Promise<RemainingTimeResult> {
+  const supabase = createServiceClient()
+
+  const { data: submission } = await supabase
+    .from('submissions')
+    .select('id, status, assessment_id, started_at, extra_seconds')
+    .eq('id', submissionId)
+    .eq('student_id', studentId)
+    .maybeSingle()
+
+  if (!submission) {
+    return { error: 'Submission not found', remainingSeconds: 0, extraSeconds: 0, overdue: true, deadline: null }
+  }
+
+  if (submission.status !== 'in_progress') {
+    return {
+      error: 'Submission is not in progress',
+      remainingSeconds: 0,
+      extraSeconds: submission.extra_seconds ?? 0,
+      overdue: true,
+      deadline: null,
+    }
+  }
+
+  const assessment = await getSubmissionTimingAssessment(supabase, submission.assessment_id)
+  if (!assessment || assessment.mode !== 'timed' || !assessment.duration_minutes) {
+    return {
+      error: 'Submission is not timed',
+      remainingSeconds: 0,
+      extraSeconds: submission.extra_seconds ?? 0,
+      overdue: false,
+      deadline: null,
+    }
+  }
+
+  const deadlineState = getDeadlineState(submission.started_at, assessment.duration_minutes, submission.extra_seconds ?? 0)
+  return {
+    error: null,
+    remainingSeconds: deadlineState.remainingSeconds,
+    extraSeconds: submission.extra_seconds ?? 0,
+    overdue: deadlineState.overdue,
+    deadline: deadlineState.deadline,
+  }
 }
 
 export async function getSubmissionForGrading(
@@ -430,7 +674,7 @@ export async function getSubmissionsForAssessment(
   offset = 0,
   search?: string,
 ): Promise<{
-  submissions: (SubmissionData & { student_name: string; student_email: string; pending_count: number })[]
+  submissions: (SubmissionData & { student_name: string; student_email: string; pending_count: number; remaining_seconds: number | null })[]
   total: number
 }> {
   const supabase = createServiceClient()
@@ -467,6 +711,8 @@ export async function getSubmissionsForAssessment(
 
   if (!submissions || submissions.length === 0) return { submissions: [], total: count ?? 0 }
 
+  let timedAssessmentDuration: number | null = null
+
   // Expire any overdue in_progress submissions so pending counts are accurate
   const inProgress = submissions.filter((s) => s.status === 'in_progress')
   if (inProgress.length > 0) {
@@ -477,10 +723,10 @@ export async function getSubmissionsForAssessment(
       .single()
 
     if (assessment && assessment.mode === 'timed' && assessment.duration_minutes) {
+      timedAssessmentDuration = assessment.duration_minutes
       const now = Date.now()
-      const durationMs = assessment.duration_minutes * 60 * 1000
       for (const s of inProgress) {
-        const deadline = new Date(s.started_at).getTime() + durationMs
+        const deadline = computeDeadline(s.started_at, assessment.duration_minutes, s.extra_seconds ?? 0)
         if (now > deadline) {
           await expireSubmission(s.id)
         }
@@ -544,6 +790,16 @@ export async function getSubmissionsForAssessment(
     }
   }
 
+  const remainingBySubmission = new Map<string, number>()
+  if (timedAssessmentDuration) {
+    const now = Date.now()
+    for (const s of submissions) {
+      if (s.status !== 'in_progress') continue
+      const deadline = computeDeadline(s.started_at, timedAssessmentDuration, s.extra_seconds ?? 0)
+      remainingBySubmission.set(s.id, remainingSeconds(deadline, now))
+    }
+  }
+
   return {
     submissions: submissions.map((s) => ({
       ...(s as SubmissionData),
@@ -554,6 +810,7 @@ export async function getSubmissionsForAssessment(
       })(),
       student_email: studentMap.get(s.student_id)?.email ?? 'Unknown',
       pending_count: pendingBySubmission.get(s.id) ?? 0,
+      remaining_seconds: remainingBySubmission.get(s.id) ?? null,
     })),
     total: count ?? 0,
   }
@@ -746,19 +1003,38 @@ export async function gradeAnswer(
   return { error: null }
 }
 
-async function isSubmissionOverdue(submission: { assessment_id: string; started_at: string }): Promise<boolean> {
+async function isSubmissionOverdue(submission: { assessment_id: string; started_at: string; extra_seconds?: number }): Promise<boolean> {
   const supabase = createServiceClient()
 
-  const { data: assessment } = await supabase
-    .from('assessments')
-    .select('duration_minutes, mode')
-    .eq('id', submission.assessment_id)
-    .single()
+  const assessment = await getSubmissionTimingAssessment(supabase, submission.assessment_id)
 
   if (!assessment || assessment.mode !== 'timed' || !assessment.duration_minutes) return false
 
-  const deadline = new Date(submission.started_at).getTime() + assessment.duration_minutes * 60 * 1000
-  return Date.now() > deadline
+  return getDeadlineState(submission.started_at, assessment.duration_minutes, submission.extra_seconds ?? 0).overdue
+}
+
+async function getSubmissionTimingAssessment(
+  supabase: ReturnType<typeof createServiceClient>,
+  assessmentId: string,
+): Promise<SubmissionTimingAssessment | null> {
+  const { data: assessment } = await supabase
+    .from('assessments')
+    .select('duration_minutes, mode, state, class_id')
+    .eq('id', assessmentId)
+    .single()
+
+  return (assessment as SubmissionTimingAssessment | null) ?? null
+}
+
+function getDeadlineState(startedAt: string, durationMinutes: number, extraSeconds: number): DeadlineState {
+  const deadline = computeDeadline(startedAt, durationMinutes, extraSeconds)
+  const now = Date.now()
+
+  return {
+    deadline,
+    remainingSeconds: remainingSeconds(deadline, now),
+    overdue: now > deadline,
+  }
 }
 
 async function createAndGradeAnswer(
@@ -1160,7 +1436,7 @@ export async function recordViolation(
   const limit = assessment?.proctoring_violations_allowed
   if (typeof limit === 'number' && violations >= limit) {
     // Reaching the limit auto-submits with status `expired`.
-    await expireSubmission(submissionId)
+    await expireSubmission(submissionId, undefined, { force: true })
   }
 
   return { violations, error: null }

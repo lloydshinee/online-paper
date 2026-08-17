@@ -26,6 +26,8 @@ export interface SubmissionData {
   student_name: string
   student_email: string
   pending_count: number
+  extra_seconds: number
+  remaining_seconds: number | null
 }
 
 export interface SubmissionDetail {

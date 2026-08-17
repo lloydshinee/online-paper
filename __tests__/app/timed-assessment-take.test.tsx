@@ -1,5 +1,5 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 import { Suspense, type ReactNode } from 'react'
 
 const actions = vi.hoisted(() => ({
@@ -12,6 +12,7 @@ const actions = vi.hoisted(() => ({
   getSubmissionHistoryAction: vi.fn(),
   getActiveSubmissionAction: vi.fn(),
   recordViolationAction: vi.fn(),
+  getRemainingTimeAction: vi.fn(),
 }))
 
 vi.mock('@/app/actions/timed-assessment', () => actions)
@@ -62,6 +63,18 @@ const hiddenResults = {
   answers: [],
 }
 
+const releasedNoRevealResults = {
+  resultStatus: 'released',
+  assessment: { title: 'Test Assessment', scores_released: true, answer_reveal_enabled: false, total_points: 3 },
+  submission: { id: 'sub-1', status: 'submitted', score_total: 3, submitted_at: '2026-08-16T00:00:00.000Z' },
+  answers: [],
+}
+
+const releasedRevealResults = {
+  ...releasedNoRevealResults,
+  assessment: { title: 'Test Assessment', scores_released: true, answer_reveal_enabled: true, total_points: 3 },
+}
+
 function renderPage() {
   // Next.js resolves the params promise before the page renders; a
   // pre-fulfilled thenable mirrors that (a plain Promise keeps `use()`
@@ -76,6 +89,12 @@ function renderPage() {
       <TakeAssessmentPage params={params} />
     </Suspense>,
   )
+}
+
+async function flushPromises() {
+  await act(async () => {
+    await Promise.resolve()
+  })
 }
 
 async function goToSubmit() {
@@ -100,9 +119,13 @@ beforeEach(() => {
   })
   actions.startAssessmentAction.mockResolvedValue({ error: null, submissionId: 'sub-1' })
   actions.getSubmissionHistoryAction.mockResolvedValue([])
+  actions.getRemainingTimeAction.mockResolvedValue({ error: null, remainingSeconds: 600, extraSeconds: 0, overdue: false, deadline: Date.now() + 600_000 })
+  actions.expireAssessmentAction.mockResolvedValue({ error: null, submission: { id: 'sub-1', extra_seconds: 0, status: 'expired' }, overdue: true, remainingSeconds: 0, deadline: null })
+  actions.recordViolationAction.mockResolvedValue({ violations: 1, error: null })
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   cleanup()
 })
 
@@ -149,5 +172,142 @@ describe('timed assessment take page', () => {
 
     await screen.findByText('Something went wrong')
     expect(screen.getByRole('button', { name: 'Submit Assessment' })).toBeDefined()
+  })
+
+  test('score release without answer reveal shows only the total score', async () => {
+    actions.submitAssessmentAction.mockResolvedValue({ error: null, submission: null })
+    actions.getSubmissionResultsAction
+      .mockReset()
+      .mockResolvedValueOnce(noSubmissionResults)
+      .mockResolvedValue(releasedNoRevealResults)
+
+    renderPage()
+    await goToSubmit()
+
+    await screen.findByText('Score Summary')
+    expect(screen.queryByText('Question Breakdown')).toBeNull()
+    expect(screen.queryByText('Correct Answer')).toBeNull()
+  })
+
+  test('score release with answer reveal shows the per-question breakdown', async () => {
+    actions.submitAssessmentAction.mockResolvedValue({ error: null, submission: null })
+    actions.getSubmissionResultsAction
+      .mockReset()
+      .mockResolvedValueOnce(noSubmissionResults)
+      .mockResolvedValue(releasedRevealResults)
+
+    renderPage()
+    await goToSubmit()
+
+    await screen.findByText('Question Breakdown')
+    expect(screen.getByText('Correct Answer')).toBeDefined()
+  })
+
+  test('poll adoption jumps the countdown and shows the extension banner', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-17T12:00:00.000Z'))
+
+    actions.getAssessmentData.mockResolvedValue({
+      error: null,
+      assessment: assessmentInfo,
+      questions,
+      timeLimit: 1,
+    })
+    actions.getRemainingTimeAction.mockResolvedValue({
+      error: null,
+      remainingSeconds: 180,
+      extraSeconds: 120,
+      overdue: false,
+      deadline: new Date('2026-08-17T12:03:00.000Z').getTime(),
+    })
+
+    renderPage()
+    await flushPromises()
+    expect(screen.getByText('01:00')).toBeDefined()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000)
+    })
+    await flushPromises()
+
+    expect(screen.getByText('03:00')).toBeDefined()
+    expect(screen.getByText('Instructor added 2 min')).toBeDefined()
+  })
+
+  test('stale zero timer does not submit when the server says not overdue', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-17T12:00:00.000Z'))
+
+    actions.getAssessmentData.mockResolvedValue({
+      error: null,
+      assessment: assessmentInfo,
+      questions,
+      timeLimit: 1,
+    })
+    actions.getRemainingTimeAction.mockResolvedValue({
+      error: null,
+      remainingSeconds: 60,
+      extraSeconds: 0,
+      overdue: false,
+      deadline: new Date('2026-08-17T12:01:00.000Z').getTime(),
+    })
+    actions.expireAssessmentAction.mockResolvedValue({
+      error: null,
+      submission: { id: 'sub-1', extra_seconds: 120, status: 'in_progress' },
+      overdue: false,
+      remainingSeconds: 120,
+      deadline: new Date('2026-08-17T12:02:00.000Z').getTime(),
+    })
+
+    renderPage()
+    await flushPromises()
+    expect(screen.getByText('01:00')).toBeDefined()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000)
+    })
+    await flushPromises()
+
+    expect(screen.getByText('02:00')).toBeDefined()
+    expect(actions.submitAssessmentAction).not.toHaveBeenCalled()
+    expect(screen.getByText('Instructor added 2 min')).toBeDefined()
+  })
+
+  test('violation path still submits through forced expiry', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-17T12:00:00.000Z'))
+
+    actions.getAssessmentData.mockResolvedValue({
+      error: null,
+      assessment: assessmentInfo,
+      questions,
+      timeLimit: 30,
+    })
+    actions.recordViolationAction.mockResolvedValue({ violations: 3, error: null })
+    const hiddenDescriptor = Object.getOwnPropertyDescriptor(Document.prototype, 'hidden')
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true })
+    actions.getSubmissionResultsAction
+      .mockReset()
+      .mockResolvedValueOnce(noSubmissionResults)
+      .mockResolvedValue(hiddenResults)
+
+    renderPage()
+    await flushPromises()
+    expect(screen.getByText('30:00')).toBeDefined()
+
+    try {
+      fireEvent(document, new Event('visibilitychange'))
+      fireEvent(document, new Event('visibilitychange'))
+      fireEvent(document, new Event('visibilitychange'))
+
+      await act(async () => {
+        await Promise.resolve()
+      })
+      expect(actions.expireAssessmentAction).toHaveBeenCalledWith('sub-1', true)
+    } finally {
+      if (hiddenDescriptor) {
+        Object.defineProperty(document, 'hidden', hiddenDescriptor)
+      }
+    }
   })
 })

@@ -1,11 +1,14 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useTransition } from 'react'
 import { toast } from 'sonner'
 import { getAssessmentSubmissions, getSubmissionDetail } from '@/app/actions/grading'
-import { Search, Eye, Check, ClipboardList, AlertCircle } from 'lucide-react'
+import * as timedAssessmentActions from '@/app/actions/timed-assessment'
+import { Search, Eye, Check, ClipboardList, AlertCircle, Clock3 } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import type { SubmissionData, SubmissionDetail } from './types'
 import { getLastName } from './types'
 import GradingPanel from './grading-panel'
@@ -13,6 +16,7 @@ import { copyToClipboard } from '@/lib/utils'
 
 interface SubmissionsTabProps {
   assessmentId: string
+  assessmentMode: string
 }
 
 interface StudentGroup {
@@ -25,7 +29,27 @@ interface StudentGroup {
   totalPending: number
 }
 
-export default function SubmissionsTab({ assessmentId }: SubmissionsTabProps) {
+const PRESET_MINUTES = [1, 5, 10, 15, 30]
+const grantTime = timedAssessmentActions as {
+  grantTimeAction?: (submissionId: string, minutes: number) => Promise<{ error: string | null; submission?: unknown }>
+}
+
+function formatRemainingTime(seconds: number) {
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const remaining = seconds % 60
+
+  if (hours > 0) return `${hours}h ${minutes}m left`
+  if (minutes > 0) return `${minutes}m ${remaining}s left`
+  return `${remaining}s left`
+}
+
+function formatAddedTime(seconds: number) {
+  const minutes = seconds / 60
+  return Number.isInteger(minutes) ? `${minutes} min added` : `${seconds}s added`
+}
+
+export default function SubmissionsTab({ assessmentId, assessmentMode }: SubmissionsTabProps) {
   const [submissions, setSubmissions] = useState<SubmissionData[]>([])
   const [submissionTotal, setSubmissionTotal] = useState(0)
   const [submissionSearch, setSubmissionSearch] = useState('')
@@ -34,6 +58,12 @@ export default function SubmissionsTab({ assessmentId }: SubmissionsTabProps) {
   const [viewingStudent, setViewingStudent] = useState<StudentGroup | null>(null)
   const [scoresCopied, setScoresCopied] = useState(false)
   const [currentAttemptNumber, setCurrentAttemptNumber] = useState<number | null>(null)
+  const [timeDialogAttempt, setTimeDialogAttempt] = useState<SubmissionData | null>(null)
+  const [selectedMinutes, setSelectedMinutes] = useState<number | null>(null)
+  const [customMinutes, setCustomMinutes] = useState('')
+  const [timeError, setTimeError] = useState<string | null>(null)
+  const [showReopenWarning, setShowReopenWarning] = useState(false)
+  const [isPending, startTransition] = useTransition()
 
   async function loadSubmissions() {
     const { submissions: subs, total } = await getAssessmentSubmissions(assessmentId, 1000, 0, submissionSearch || undefined)
@@ -108,6 +138,126 @@ export default function SubmissionsTab({ assessmentId }: SubmissionsTabProps) {
   }
 
   const formatDate = (d: string | null) => d ? new Date(d).toLocaleString() : '-'
+
+  function openAddTimeDialog(submission: SubmissionData) {
+    setTimeDialogAttempt(submission)
+    setSelectedMinutes(null)
+    setCustomMinutes('')
+    setTimeError(null)
+    setShowReopenWarning(false)
+  }
+
+  function closeAddTimeDialog() {
+    setTimeDialogAttempt(null)
+    setSelectedMinutes(null)
+    setCustomMinutes('')
+    setTimeError(null)
+    setShowReopenWarning(false)
+  }
+
+  function resolveMinutes() {
+    if (selectedMinutes != null) return selectedMinutes
+    if (customMinutes.trim().length === 0) {
+      return null
+    }
+    const parsed = Number(customMinutes)
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return null
+    }
+    return parsed
+  }
+
+  async function refreshStudentDialog(targetStudentId?: string) {
+    const { submissions: subs, total } = await getAssessmentSubmissions(assessmentId, 1000, 0, submissionSearch || undefined)
+    subs.sort((a, b) => getLastName(a.student_name).localeCompare(getLastName(b.student_name)))
+    setSubmissions(subs)
+    setSubmissionTotal(total)
+
+    if (!targetStudentId) return
+
+    const grouped = new Map<string, SubmissionData[]>()
+    for (const submission of subs) {
+      const list = grouped.get(submission.student_id) || []
+      list.push(submission)
+      grouped.set(submission.student_id, list)
+    }
+
+    const updated = grouped.get(targetStudentId)
+    if (!updated || updated.length === 0) {
+      setViewingStudent(null)
+      return
+    }
+
+    const sorted = [...updated].sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime())
+    setViewingStudent({
+      studentId: targetStudentId,
+      studentName: sorted[0].student_name,
+      studentEmail: sorted[0].student_email,
+      submissions: sorted,
+      attemptCount: sorted.length,
+      latestScore: sorted[0].score_total,
+      totalPending: sorted.reduce((sum, s) => sum + (s.pending_count ?? 0), 0),
+    })
+  }
+
+  function isLatestFinishedAttempt(submissionsForStudent: SubmissionData[], submission: SubmissionData) {
+    const latestFinished = submissionsForStudent.find((attempt) => attempt.status !== 'in_progress')
+    return latestFinished?.id === submission.id
+  }
+
+  function canAddTime(submissionsForStudent: SubmissionData[], submission: SubmissionData) {
+    if (assessmentMode !== 'timed') return false
+    if (submission.status === 'in_progress') return true
+    return isLatestFinishedAttempt(submissionsForStudent, submission)
+  }
+
+  async function submitGrantTime() {
+    if (!timeDialogAttempt || isPending) return
+
+    const minutes = resolveMinutes()
+    if (minutes == null) {
+      setTimeError('Enter a valid number of minutes greater than zero')
+      return
+    }
+
+    setTimeError(null)
+
+    startTransition(async () => {
+      if (!grantTime.grantTimeAction) {
+        toast.error('Add time is not available yet')
+        return
+      }
+
+      const result = await grantTime.grantTimeAction(timeDialogAttempt.id, minutes)
+      await refreshStudentDialog(timeDialogAttempt.student_id)
+
+      if (result.error) {
+        toast.error(result.error)
+        return
+      }
+
+      toast.success(`Added ${minutes} minute${minutes !== 1 ? 's' : ''}`)
+      closeAddTimeDialog()
+    })
+  }
+
+  function handleConfirmTime() {
+    if (!timeDialogAttempt) return
+
+    const minutes = resolveMinutes()
+    if (minutes == null) {
+      setTimeError('Enter a valid number of minutes greater than zero')
+      return
+    }
+
+    if (timeDialogAttempt.status === 'in_progress') {
+      void submitGrantTime()
+      return
+    }
+
+    setTimeError(null)
+    setShowReopenWarning(true)
+  }
 
   if (viewingSubmission) {
     return (
@@ -230,11 +380,11 @@ export default function SubmissionsTab({ assessmentId }: SubmissionsTabProps) {
                   <div>
                     <div className="flex items-center gap-2 mb-1">
                       <span className="text-sm font-medium">Attempt {viewingStudent.submissions.length - idx}</span>
-                      <span className={`rounded-md px-1.5 py-0.5 text-xs ${
-                        s.status === 'submitted' ? 'bg-green-100 text-green-700 dark:bg-green-900/20 dark:text-green-400'
-                        : s.status === 'expired' ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/20 dark:text-yellow-400'
-                        : 'bg-muted text-muted-foreground'
-                      }`}>
+                        <span className={`rounded-md px-1.5 py-0.5 text-xs ${
+                          s.status === 'submitted' ? 'bg-green-100 text-green-700 dark:bg-green-900/20 dark:text-green-400'
+                          : s.status === 'expired' ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/20 dark:text-yellow-400'
+                          : 'bg-muted text-muted-foreground'
+                        }`}>
                         {s.status === 'submitted' ? 'Submitted' : s.status === 'expired' ? 'Expired' : 'In progress'}
                       </span>
                     </div>
@@ -249,6 +399,17 @@ export default function SubmissionsTab({ assessmentId }: SubmissionsTabProps) {
                           {s.pending_count} ungraded
                         </span>
                       )}
+                      {s.status === 'in_progress' && s.remaining_seconds != null && (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-blue-100 dark:bg-blue-900/20 px-1.5 py-0.5 text-xs text-blue-700 dark:text-blue-400 font-medium">
+                          <Clock3 size={10} />
+                          {formatRemainingTime(s.remaining_seconds)}
+                        </span>
+                      )}
+                      {s.extra_seconds > 0 && (
+                        <span className="rounded-md bg-emerald-100 px-1.5 py-0.5 text-xs text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-400 font-medium">
+                          Time added: {formatAddedTime(s.extra_seconds)}
+                        </span>
+                      )}
                       {(s.violations ?? 0) > 0 && (
                         <span className="rounded-md bg-destructive/10 px-1.5 py-0.5 text-xs text-destructive font-medium">
                           {s.violations} violation{(s.violations ?? 0) !== 1 ? 's' : ''}
@@ -257,6 +418,12 @@ export default function SubmissionsTab({ assessmentId }: SubmissionsTabProps) {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    {canAddTime(viewingStudent.submissions, s) && (
+                      <button onClick={() => openAddTimeDialog(s)}
+                        className="inline-flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-xs hover:bg-muted transition-colors">
+                        <Clock3 size={12} /> Add time
+                      </button>
+                    )}
                     <button onClick={() => { setCurrentAttemptNumber(viewingStudent.submissions.length - idx); setViewingStudent(null); viewSubmission(s.id) }}
                       className="inline-flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-xs hover:bg-muted transition-colors">
                       <Eye size={12} /> View
@@ -268,6 +435,74 @@ export default function SubmissionsTab({ assessmentId }: SubmissionsTabProps) {
           </div>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={timeDialogAttempt !== null} onOpenChange={(open) => { if (!open) closeAddTimeDialog() }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Add time</DialogTitle>
+            <DialogDescription>
+              {timeDialogAttempt?.status === 'in_progress'
+                ? 'Extend this in-progress attempt.'
+                : 'Re-open this finished attempt with extra time.'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-5 gap-2">
+              {PRESET_MINUTES.map((minutes) => (
+                <Button
+                  key={minutes}
+                  type="button"
+                  variant={selectedMinutes === minutes ? 'default' : 'outline'}
+                  size="sm"
+                  onClick={() => {
+                    setSelectedMinutes(minutes)
+                    setCustomMinutes('')
+                    setTimeError(null)
+                  }}
+                >
+                  {minutes}m
+                </Button>
+              ))}
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-muted-foreground" htmlFor="custom-minutes">Custom minutes</label>
+              <Input
+                id="custom-minutes"
+                inputMode="decimal"
+                placeholder="Enter minutes"
+                value={customMinutes}
+                onChange={(e) => {
+                  setCustomMinutes(e.target.value)
+                  setSelectedMinutes(null)
+                  setTimeError(null)
+                }}
+              />
+            </div>
+            {timeError && <p className="text-xs text-destructive">{timeError}</p>}
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={closeAddTimeDialog} disabled={isPending}>Cancel</Button>
+              <Button type="button" onClick={handleConfirmTime} disabled={isPending}>Confirm</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={showReopenWarning} onOpenChange={setShowReopenWarning}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Re-open this attempt?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Re-opening lets the student continue, clears auto-grades, and keeps manual grades.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void submitGrantTime()} disabled={isPending}>
+              Re-open and add time
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

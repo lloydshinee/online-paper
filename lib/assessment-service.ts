@@ -2,6 +2,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import type { ParsedQuestion } from '@/lib/question-parser'
 import { recalculateAssessmentScores } from '@/lib/submission-service'
 import { sanitizeQuestionForStudent } from '@/lib/question-sanitizer'
+import { computeDeadline } from '@/lib/deadline'
 
 export interface DashboardAssessment {
   id: string
@@ -22,7 +23,7 @@ export interface DashboardAssessment {
 const ASSESSMENT_SELECT = 'id, class_id, title, mode, state, duration_minutes, scores_released, answer_reveal_enabled, accepting_submissions, retakes_allowed, created_at'
 
 type AssessmentForMap = { id: string; mode: string; duration_minutes: number | null; scores_released?: boolean }
-type SubmissionForMap = { assessment_id: string; status: string; score_total: number | null; started_at: string }
+type SubmissionForMap = { assessment_id: string; status: string; score_total: number | null; started_at: string; extra_seconds?: number }
 
 function buildSubmissionMap(
   assessments: AssessmentForMap[],
@@ -48,7 +49,7 @@ function buildSubmissionMap(
       const isOverdue =
         assessment.mode === 'timed' &&
         assessment.duration_minutes != null &&
-        new Date(latest.started_at).getTime() + assessment.duration_minutes * 60 * 1000 < Date.now()
+        computeDeadline(latest.started_at, assessment.duration_minutes, latest.extra_seconds ?? 0) < Date.now()
 
       if (isOverdue) {
         const completed = subs.find((s) => s.status === 'submitted' || s.status === 'expired')
@@ -559,7 +560,7 @@ export async function getStudentAssessments(
   const assessmentIds = assessments.map((a) => a.id)
   const { data: submissions } = await supabase
     .from('submissions')
-    .select('id, assessment_id, status, score_total, started_at')
+    .select('id, assessment_id, status, score_total, started_at, extra_seconds')
     .eq('student_id', studentId)
     .in('assessment_id', assessmentIds)
     .order('started_at', { ascending: false })
@@ -682,7 +683,7 @@ export async function getAllStudentAssessments(
   const assessmentIds = assessments.map((a) => a.id)
   const { data: submissions } = await supabase
     .from('submissions')
-    .select('id, assessment_id, status, score_total, started_at')
+    .select('id, assessment_id, status, score_total, started_at, extra_seconds')
     .eq('student_id', studentId)
     .in('assessment_id', assessmentIds)
     .order('started_at', { ascending: false })
