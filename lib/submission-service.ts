@@ -702,33 +702,32 @@ export async function getSubmissionsForAssessment(
 }> {
   const supabase = createServiceClient()
 
-  // If searching, first find matching student IDs
+  // If searching, first find matching student IDs. Match against the real
+  // profile columns — an earlier version filtered on users.name, which does
+  // not exist, so every search errored and returned zero rows.
   let studentFilter: string[] | undefined
   if (search) {
     const { data: matchingStudents } = await supabase
       .from('users')
       .select('id')
-      .or(`name.ilike.%${search}%,email.ilike.%${search}%`)
+      .or(`firstname.ilike.%${search}%,lastname.ilike.%${search}%,email.ilike.%${search}%`)
     studentFilter = (matchingStudents ?? []).map((s) => s.id)
     if (studentFilter.length === 0) return { submissions: [], total: 0 }
   }
 
-  let countQuery = supabase.from('submissions').select('*', { count: 'exact', head: true }).eq('assessment_id', assessmentId)
-  if (studentFilter) {
-    countQuery = countQuery.in('student_id', studentFilter)
-  }
-  const { count } = await countQuery
+  const countQuery = supabase.from('submissions').select('*', { count: 'exact', head: true }).eq('assessment_id', assessmentId)
+  const { count } = await (studentFilter ? countQuery.in('student_id', studentFilter) : countQuery)
 
+  // Filter before windowing so matches beyond the current slice are visible.
   let dataQuery = supabase
     .from('submissions')
     .select('*')
     .eq('assessment_id', assessmentId)
     .order('started_at', { ascending: false })
-    .range(offset, offset + limit - 1)
-
   if (studentFilter) {
     dataQuery = dataQuery.in('student_id', studentFilter)
   }
+  dataQuery = dataQuery.range(offset, offset + limit - 1)
 
   const { data: submissions } = await dataQuery
 
