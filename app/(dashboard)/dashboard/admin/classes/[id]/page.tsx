@@ -137,7 +137,9 @@ export default function AdminClassPage({
               <div className="border-b border-border px-6 py-4">
                 <p className="text-sm font-medium">Assessments</p>
               </div>
-              <div className="divide-y divide-border -mx-6">
+              {/* No -mx-6 here: the card itself has no padding to cancel,
+                   so full-bleed rows would overhang the border box. */}
+              <div className="divide-y divide-border">
                 {assessments.map((a) => (
                   <button key={a.id}
                     onClick={() => handleAssessmentSelect(selectedAssessment === a.id ? null : a.id)}
