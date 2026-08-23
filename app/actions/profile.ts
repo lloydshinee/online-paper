@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { createServiceClient } from '@/lib/supabase/service'
+import { avatarObjectPath, avatarSrc } from '@/lib/avatar'
 
 export async function updateProfileAction(
   prevState: { error?: string; success?: string } | null,
@@ -49,7 +50,7 @@ export async function uploadAvatarAction(
   }
 
   const ext = file.type.split('/')[1]
-  const filePath = `${authUser.id}/avatar.${ext}`
+  const filePath = avatarObjectPath(authUser.id, ext)
 
   // Delete old avatar if exists
   const { data: existing } = await supabase.storage.from('avatars').list(authUser.id)
@@ -66,16 +67,15 @@ export async function uploadAvatarAction(
 
   if (uploadError) return { error: uploadError.message }
 
-  const { data: publicUrl } = supabase.storage
-    .from('avatars')
-    .getPublicUrl(filePath)
-
-  // Update users table
+  // Store the object path, never a public URL: getPublicUrl() bakes the
+  // uploading environment's host (e.g. localhost) into the database, which
+  // breaks the image for every other viewer. Rendering resolves paths via
+  // avatarSrc() against the configured instance.
   await serviceClient
     .from('users')
-    .update({ avatar_url: publicUrl.publicUrl })
+    .update({ avatar_url: filePath })
     .eq('id', authUser.id)
 
   revalidatePath('/dashboard', 'layout')
-  return { url: publicUrl.publicUrl }
+  return { url: avatarSrc(filePath) ?? undefined }
 }

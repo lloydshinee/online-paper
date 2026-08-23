@@ -12,6 +12,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { Camera } from 'lucide-react'
+import { avatarSrc } from '@/lib/avatar'
 
 export function ProfileDialog({
   userName,
@@ -33,7 +34,7 @@ export function ProfileDialog({
   const [uploadError, setUploadError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const displayAvatarUrl = avatarUrl || initialAvatarUrl
+  const displayAvatarUrl = avatarSrc(avatarUrl) ?? avatarSrc(initialAvatarUrl)
 
   const initials = [
     initialFirstname?.[0] ?? '',
