@@ -12,8 +12,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest",
-    "test:e2e": "next build && playwright test"
+    "test": "vitest run",
+    "posttest": "npm run db:clean",
+    "test:e2e": "next build && playwright test",
+    "db:clean": "bash scripts/db-clean-test.sh"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
