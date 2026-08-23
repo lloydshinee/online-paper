@@ -2,9 +2,11 @@
 
 Severity: MEDIUM cluster (all in the student `live/page.tsx` unless noted)
 
-Status: ready-for-agent
+Status: done
 
-Prerequisite note: building a small RTL harness for this page would let issues 04 and 07 gain regression tests.
+Prerequisite note: RTL harness landed as `__tests__/app/student-live-page.test.tsx`
+(7 tests) covering each path below; issue 04's restore path is covered by the
+same harness pattern.
 
 ## Problems
 
@@ -15,8 +17,13 @@ Prerequisite note: building a small RTL harness for this page would let issues 0
 
 ## Acceptance criteria
 
-- [ ] Opening an ended session renders the ended screen
-- [ ] A stale lower-index snapshot can no longer displace a newer applied view
-- [ ] No interval survives unmount; bounded retries when the flip reverts
-- [ ] Lobby-of-active converges within one slow poll after a missed Begin
-- [ ] RTL/e2e coverage for each path once the harness lands
+- [x] Opening an ended session renders the ended screen (join skipped for
+  status `ended`; a mid-init end rejection re-fetches and applies the view)
+- [x] A stale lower-index snapshot can no longer displace a newer applied view
+  (both polls claim their sequence before fetching; the slow poll additionally
+  refuses fetched indexes below the applied one)
+- [x] No interval survives unmount; bounded retries (20 x 1.5s) when the flip
+  reverts; repeated 'end' events replace rather than stack the poll
+- [x] Lobby-of-active converges within one fast poll after a missed Begin
+  (init now polls until a question is visible, not merely until status reads)
+- [x] RTL coverage for each path

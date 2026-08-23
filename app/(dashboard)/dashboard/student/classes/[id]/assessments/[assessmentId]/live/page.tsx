@@ -46,6 +46,10 @@ const AUTOSAVE_DEBOUNCE_MS = 800
 /** Light poll cadence while Active (recovers missed end/advance broadcasts). */
 const SLOW_POLL_MS = 12_000
 
+/** Cadence and give-up bound when waiting for the server's end conversion. */
+const END_POLL_INTERVAL_MS = 1_500
+const END_POLL_MAX_ATTEMPTS = 20
+
 export default function StudentLivePage({
   params: paramsPromise,
 }: {
@@ -73,6 +77,7 @@ export default function StudentLivePage({
   const pendingSaveRef = useRef<{ questionId: string; content: Record<string, unknown> } | null>(null)
   const saveChainsRef = useRef<Record<string, Promise<void>>>({})
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const endPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const questionLoadSeqRef = useRef(0)
   const unmountedRef = useRef(false)
   const joinedRef = useRef(false)
@@ -229,18 +234,20 @@ export default function StudentLivePage({
   const startPolling = useCallback(() => {
     if (pollRef.current) return
     pollRef.current = setInterval(async () => {
+      // Claim the sequence before fetching: a broadcast firing mid-fetch must
+      // supersede this snapshot, never the reverse. Assigning after the fetch
+      // let a pre-advance snapshot win and bounce the student back a question.
+      const seq = ++questionLoadSeqRef.current
       const view = await loadSessionView()
-      if (view && view !== null) {
-        const seq = ++questionLoadSeqRef.current
-        const applied = await applyView(view, seq)
-        const converged =
-          view.session.status === 'ended' ||
-          (view.session.status === 'active' && view.currentQuestion !== null)
-        if (applied && converged) {
-          if (pollRef.current) {
-            clearInterval(pollRef.current)
-            pollRef.current = null
-          }
+      if (!view) return
+      const applied = await applyView(view, seq)
+      const converged =
+        view.session.status === 'ended' ||
+        (view.session.status === 'active' && view.currentQuestion !== null)
+      if (applied && converged) {
+        if (pollRef.current) {
+          clearInterval(pollRef.current)
+          pollRef.current = null
         }
       }
     }, 2000)
@@ -280,12 +287,29 @@ export default function StudentLivePage({
           return
         }
 
+        // An ended session needs no membership row: render the Ended screen
+        // directly. Joining first rejected with "This live session has
+        // ended", which fell through to the generic error view.
+        if (view.session.status === 'ended') {
+          const seq = ++questionLoadSeqRef.current
+          await applyView(view, seq)
+          return
+        }
+
         // Join (persist membership) as soon as a non-ended session exists.
         const join = await joinLiveSessionAction(view.session.id)
         if (cancelled) return
         if (join?.error && /another live session/i.test(join.error)) {
           setError('You are already in another live assessment session.')
           setViewState('blocked')
+          return
+        }
+        if (join?.error && /has ended/i.test(join.error)) {
+          // The session ended between the view fetch and the join attempt.
+          const fresh = await loadSessionView()
+          if (cancelled) return
+          const seq = ++questionLoadSeqRef.current
+          await applyView(fresh ?? view, seq)
           return
         }
         if (join?.error && !/already/.test(join.error)) {
@@ -297,7 +321,12 @@ export default function StudentLivePage({
         const seq = ++questionLoadSeqRef.current
         const applied = await applyView(view, seq)
         if (cancelled) return
-        if (!applied || view.session.status === 'waiting') {
+        // Keep polling until the student can see a question: an active
+        // session at index -1 renders as waiting, and a missed Begin
+        // broadcast must stay recoverable by polling. Ended already returned
+        // above; only a visible question means convergence.
+        const converged = view.session.status === 'active' && view.currentQuestion !== null
+        if (!applied || !converged) {
           startPolling()
         }
       } catch {
@@ -314,6 +343,10 @@ export default function StudentLivePage({
         clearInterval(pollRef.current)
         pollRef.current = null
       }
+      if (endPollRef.current) {
+        clearInterval(endPollRef.current)
+        endPollRef.current = null
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assessmentId])
@@ -328,6 +361,16 @@ export default function StudentLivePage({
       config: { presence: { key: userIdRef.current ?? `anon-${Date.now()}` } },
     })
     channelRef.current = channel
+
+    // Held in a ref so effect cleanup and unmount can always cancel it; a
+    // closure-local interval was unreachable, stacked per delivered 'end'
+    // event, and polled forever when the conversion flip reverted.
+    const stopEndPoll = () => {
+      if (endPollRef.current) {
+        clearInterval(endPollRef.current)
+        endPollRef.current = null
+      }
+    }
 
     const handleAdvance = async () => {
       const sid = sessionRef.current?.id
@@ -371,14 +414,30 @@ export default function StudentLivePage({
         } catch {
           // A rejected flush (session already ended) still converges to Ended.
         }
-        const pollEnded = setInterval(async () => {
+        stopEndPoll()
+        let attempts = 0
+        endPollRef.current = setInterval(async () => {
+          attempts += 1
+          if (unmountedRef.current) {
+            stopEndPoll()
+            return
+          }
           const view = await loadSessionView()
-          if (view && view !== null && view.session.status === 'ended') {
-            clearInterval(pollEnded)
+          if (unmountedRef.current) {
+            stopEndPoll()
+            return
+          }
+          if (view && view.session.status === 'ended') {
+            stopEndPoll()
             const seq = ++questionLoadSeqRef.current
             await applyView(view, seq)
+          } else if (attempts >= END_POLL_MAX_ATTEMPTS) {
+            // Conversion never landed within the grace window (e.g. the flip
+            // reverted on failure) — stop polling; the active-path slow poll
+            // keeps watching for the terminal state.
+            stopEndPoll()
           }
-        }, 1500)
+        }, END_POLL_INTERVAL_MS)
       })
       .on('presence', { event: 'sync' }, () => {
         const state = channel.presenceState()
@@ -394,6 +453,7 @@ export default function StudentLivePage({
       })
 
     return () => {
+      stopEndPoll()
       channelRef.current = null
       supabase.removeChannel(channel)
     }
@@ -415,11 +475,13 @@ export default function StudentLivePage({
     if (viewState !== 'active') return
 
     const timer = setInterval(async () => {
+      // Claim the sequence before fetching — same ordering as the broadcast
+      // handler, so a broadcast landing mid-fetch supersedes this snapshot.
+      const seq = ++questionLoadSeqRef.current
       const view = await loadSessionView()
-      if (!view) return
+      if (!view || seq !== questionLoadSeqRef.current) return
 
       if (view.session.status === 'ended') {
-        const seq = ++questionLoadSeqRef.current
         await applyView(view, seq)
         return
       }
@@ -429,10 +491,11 @@ export default function StudentLivePage({
         view.session.status === 'active' &&
         view.session.current_question_index !== localIndex
       ) {
+        // A snapshot older than the applied view must never regress it.
+        if (view.session.current_question_index < localIndex) return
+
         // Flush the outgoing question's pending save with the old question id.
         await flushPendingSave()
-
-        const seq = ++questionLoadSeqRef.current
 
         // Synchronously clear the old answer so it can never render under the
         // new question, nor be saved against the new question's id.
