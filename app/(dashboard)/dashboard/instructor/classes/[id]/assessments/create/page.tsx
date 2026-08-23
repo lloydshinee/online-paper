@@ -5,10 +5,12 @@ import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { createAssessmentAction } from '@/app/actions/assessments'
 import DashboardHeader from '@/components/dashboard-header'
+import { useCurrentUserProfile, profileDisplayName } from '@/components/use-current-user-profile'
 import { ArrowLeft } from 'lucide-react'
 import Link from 'next/link'
 
 export default function CreateAssessmentPage({ params: paramsPromise }: { params: Promise<{ id: string }> }) {
+  const profile = useCurrentUserProfile()
   const [classId, setClassId] = useState<string>('')
   const [mode, setMode] = useState<'timed' | 'live'>('timed')
   const router = useRouter()
@@ -33,7 +35,13 @@ export default function CreateAssessmentPage({ params: paramsPromise }: { params
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <DashboardHeader userName="" />
+<DashboardHeader
+      userName={profileDisplayName(profile)}
+      userFirstname={profile?.firstname ?? null}
+      userLastname={profile?.lastname ?? null}
+      userEmail={profile?.email ?? ''}
+      userAvatarUrl={profile?.avatar_url ?? null}
+        />
 
       <main className="mx-auto max-w-lg px-6 py-10">
         <Link

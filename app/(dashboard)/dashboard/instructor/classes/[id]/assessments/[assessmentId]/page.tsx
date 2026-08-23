@@ -8,6 +8,7 @@ import {
 } from '@/app/actions/assessments'
 import { ArrowLeft, Radio } from 'lucide-react'
 import DashboardHeader from '@/components/dashboard-header'
+import { useCurrentUserProfile, profileDisplayName } from '@/components/use-current-user-profile'
 import Link from 'next/link'
 import type { AssessmentInfo, PageTab } from './_components/types'
 
@@ -34,6 +35,7 @@ export default function AssessmentPage({
 }) {
   const { id: classId, assessmentId } = use(paramsPromise)
   const router = useRouter()
+  const profile = useCurrentUserProfile()
 
   const [assessment, setAssessment] = useState<AssessmentInfo | null>(null)
   const [tab, setTab] = useState<PageTab>('questions')
@@ -66,7 +68,13 @@ export default function AssessmentPage({
   if (!loaded) {
     return (
       <div className="min-h-screen bg-background text-foreground">
-        <DashboardHeader userName="" />
+<DashboardHeader
+        userName={profileDisplayName(profile)}
+        userFirstname={profile?.firstname ?? null}
+        userLastname={profile?.lastname ?? null}
+        userEmail={profile?.email ?? ''}
+        userAvatarUrl={profile?.avatar_url ?? null}
+        />
         <main className="mx-auto max-w-5xl px-6 py-10">
           <div className="animate-pulse rounded-xl bg-muted h-32 mb-6" />
           <div className="animate-pulse rounded-xl bg-muted h-96" />
@@ -85,7 +93,13 @@ export default function AssessmentPage({
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <DashboardHeader userName="" />
+<DashboardHeader
+      userName={profileDisplayName(profile)}
+      userFirstname={profile?.firstname ?? null}
+      userLastname={profile?.lastname ?? null}
+      userEmail={profile?.email ?? ''}
+      userAvatarUrl={profile?.avatar_url ?? null}
+        />
 
       <main className="mx-auto max-w-5xl px-6 py-10">
         <Link

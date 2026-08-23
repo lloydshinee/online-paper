@@ -31,6 +31,12 @@ and the admin pages.
   migration. Covered by `__tests__/lib/avatar.test.ts`.
 - `getCurrentUserProfileAction()` in `app/actions/profile.ts`; both admin
   pages use it instead of scanning lists.
+- Third cluster member found during classroom prep: the instructor/student
+  assessment pages and the create page rendered `<DashboardHeader userName="" />`
+  — no identity source at all. Fixed via the shared client hook
+  `components/use-current-user-profile.ts` (`useCurrentUserProfile`),
+  now the single identity path for client-page headers.
 - Verified with Playwright against production build: legacy localhost URL
   renders as the configured instance and loads (HTTP 200); admin + newer
-  decoy student fixture shows "E2E Admin" on both admin pages.
+  decoy student fixture shows "E2E Admin" on both admin pages; instructor
+  create and assessment-detail pages show "E2E Instructor".

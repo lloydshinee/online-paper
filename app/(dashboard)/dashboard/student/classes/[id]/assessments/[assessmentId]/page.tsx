@@ -7,6 +7,7 @@ import { startAssessmentAction, saveAnswerAction, submitAssessmentAction, expire
 import { Clock, Lightbulb, ChevronLeft, ChevronRight, CheckCircle, XCircle, Clock3, AlertCircle, AlertTriangle, RotateCcw, Loader2 } from 'lucide-react'
 import { computeDeadline, remainingSeconds } from '@/lib/deadline'
 import DashboardHeader from '@/components/dashboard-header'
+import { useCurrentUserProfile, profileDisplayName } from '@/components/use-current-user-profile'
 import Link from 'next/link'
 
 interface QuestionData {
@@ -81,6 +82,7 @@ export default function TakeAssessmentPage({
   const { id: classId, assessmentId } = use(paramsPromise)
   const searchParams = useSearchParams()
   const router = useRouter()
+  const profile = useCurrentUserProfile()
   const isRetake = searchParams.get('retake') === '1'
 
   const [loading, setLoading] = useState(true)
@@ -634,7 +636,13 @@ export default function TakeAssessmentPage({
 
     return (
       <div className="min-h-screen bg-background text-foreground">
-        <DashboardHeader userName="" />
+<DashboardHeader
+        userName={profileDisplayName(profile)}
+        userFirstname={profile?.firstname ?? null}
+        userLastname={profile?.lastname ?? null}
+        userEmail={profile?.email ?? ''}
+        userAvatarUrl={profile?.avatar_url ?? null}
+        />
 
       {violations > 0 && assessment && (
         <div className="mx-auto max-w-4xl px-6 pt-4">
