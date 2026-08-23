@@ -38,6 +38,19 @@ export interface SubmissionWithAnswers extends SubmissionData {
   answers: AnswerData[]
 }
 
+/** Answer fields safe to hand a student on an in-progress attempt: identity
+ * plus content only — never score, is_correct, or feedback (a reopened
+ * attempt can still carry manual grades from its previous life). */
+export interface StudentActiveAnswer {
+  id: string
+  question_id: string
+  answer_content: Record<string, unknown>
+}
+
+export interface StudentActiveSubmission extends SubmissionData {
+  answers: StudentActiveAnswer[]
+}
+
 interface SubmissionResult {
   submission: SubmissionData | null
   error: string | null
@@ -193,7 +206,7 @@ export async function getSubmission(
 export async function getActiveSubmission(
   studentId: string,
   assessmentId: string,
-): Promise<SubmissionWithAnswers | null> {
+): Promise<StudentActiveSubmission | null> {
   const supabase = createServiceClient()
 
   const { data: submission } = await supabase
@@ -214,12 +227,15 @@ export async function getActiveSubmission(
     }
   }
 
+  // Grading columns are deliberately excluded: an attempt reopened by a time
+  // extension keeps its previous Essay/Coding grades until resubmitted, and
+  // those must not reach the student while scores are unreleased.
   const { data: answers } = await supabase
     .from('answers')
-    .select('*')
+    .select('id, question_id, answer_content')
     .eq('submission_id', submission.id)
 
-  return { ...(submission as SubmissionData), answers: (answers as AnswerData[]) ?? [] }
+  return { ...(submission as SubmissionData), answers: (answers as StudentActiveAnswer[]) ?? [] }
 }
 
 export async function saveAnswer(
@@ -459,18 +475,24 @@ export async function extendSubmissionTime(
       return { submission: null, error: 'Only the current in-progress submission can be extended' }
     }
 
-    const { data: updated, error } = await supabase
-      .from('submissions')
-      .update({ extra_seconds: (submission.extra_seconds ?? 0) + grantedSeconds })
-      .eq('id', submission.id)
-      .select('*')
-      .single()
+    // Atomic increment with a status guard: a concurrent manual submit or
+    // expiry makes this match zero rows instead of stacking seconds onto a
+    // dead submission, and two concurrent grants can no longer lose one.
+    const { data: updatedRows, error: updateError } = await supabase.rpc('increment_extra_seconds', {
+      p_submission_id: submission.id,
+      p_seconds: grantedSeconds,
+    })
 
-    if (error) {
-      return { submission: null, error: error.message }
+    if (updateError) {
+      return { submission: null, error: updateError.message }
     }
 
-    return { submission: updated as SubmissionData, error: null }
+    const updated = (updatedRows as SubmissionData[] | null)?.[0]
+    if (!updated) {
+      return { submission: null, error: 'Submission is no longer in progress' }
+    }
+
+    return { submission: updated, error: null }
   }
 
   if (submission.status !== 'submitted' && submission.status !== 'expired') {
@@ -521,6 +543,11 @@ export async function extendSubmissionTime(
     return { submission: null, error: 'Submission is no longer eligible for reopening' }
   }
 
+  // Best-effort reset of auto-grading on the reopened attempt. Failure is
+  // non-fatal and NOT reported as a failed reopen (the row is already
+  // in_progress; reporting an error made instructors retry and stack grant
+  // seconds). Stale values are safe: grading recomputes every answer on the
+  // next submit, and getActiveSubmission no longer exposes these columns.
   const { data: autoQuestions } = await supabase
     .from('questions')
     .select('id')
@@ -529,15 +556,11 @@ export async function extendSubmissionTime(
 
   const autoQuestionIds = (autoQuestions ?? []).map((question) => question.id)
   if (autoQuestionIds.length > 0) {
-    const { error: answerError } = await supabase
+    await supabase
       .from('answers')
       .update({ is_correct: null, score: null })
       .eq('submission_id', submission.id)
       .in('question_id', autoQuestionIds)
-
-    if (answerError) {
-      return { submission: null, error: answerError.message }
-    }
   }
 
   return { submission: transitioned as SubmissionData, error: null }
@@ -729,6 +752,10 @@ export async function getSubmissionsForAssessment(
         const deadline = computeDeadline(s.started_at, assessment.duration_minutes, s.extra_seconds ?? 0)
         if (now > deadline) {
           await expireSubmission(s.id)
+          // Refresh the row we return: the instructor dialog classifies
+          // grant-vs-reopen by this status, and a stale 'in_progress' here
+          // silently skips the destructive-reopen warning.
+          s.status = 'expired'
         }
       }
     }
@@ -1312,17 +1339,14 @@ export async function getStudentSubmissionResults(
 
   resultAnswers.sort((a, b) => (a.questions?.order_index ?? 0) - (b.questions?.order_index ?? 0))
 
+  // Two independent gates (CONTEXT.md): the total follows score release;
+  // per-question grading data and the answer key follow answer reveal.
+  // Per-question correctness is as revealing as the key itself, so BOTH
+  // per-answer fields and key content stay hidden until their own gate opens,
+  // regardless of the other setting's state.
   if (!assessment.answer_reveal_enabled) {
-    // Answer reveal gates ALL per-question grading data — not just the
-    // answer key. Per-question correctness (is_correct, points earned,
-    // feedback) is as revealing as the correct answer itself, so it must
-    // stay hidden until the instructor activates answer reveal, even after
-    // scores are released.
     resultAnswers = resultAnswers.map((a) => ({
       ...a,
-      score: null,
-      is_correct: null,
-      feedback: null,
       questions: {
         ...a.questions,
         content: sanitizeQuestionContent(a.questions.content),
@@ -1334,6 +1358,15 @@ export async function getStudentSubmissionResults(
 
   if (!assessment.scores_released) {
     resultSubmission = { ...resultSubmission, score_total: null }
+  }
+
+  if (!assessment.scores_released || !assessment.answer_reveal_enabled) {
+    resultAnswers = resultAnswers.map((a) => ({
+      ...a,
+      score: null,
+      is_correct: null,
+      feedback: null,
+    }))
   }
 
   return {
@@ -1403,15 +1436,17 @@ export interface ViolationResult {
 
 export async function recordViolation(
   submissionId: string,
-  studentId?: string,
+  studentId: string,
 ): Promise<ViolationResult> {
   const supabase = createServiceClient()
 
   // Atomic increment via RPC: no read-modify-write lost updates, ownership
-  // bound to the requesting student, and non-in-progress rows ignored.
+  // bound to the server-verified requesting student, and non-in-progress
+  // rows ignored. EXECUTE on the function is service-role-only, so the
+  // ownership argument can never be supplied (or nulled) from the wire.
   const { data, error } = await supabase.rpc('increment_violation', {
     p_submission_id: submissionId,
-    p_student_id: studentId ?? null,
+    p_student_id: studentId,
   })
 
   if (error) {

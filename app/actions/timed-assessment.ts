@@ -39,15 +39,23 @@ export async function getDashboardAssessments() {
 
 export async function startAssessmentAction(assessmentId: string, retake = false) {
   const auth = await authorize(['student'])
-  if ('error' in auth) return { error: auth.error, submissionId: null }
+  if ('error' in auth) return { error: auth.error, submissionId: null, startedAt: null, extraSeconds: 0 }
 
   const result = await startSubmission(auth.userId, assessmentId, retake ? { retake: true } : undefined)
 
   if (result.error) {
-    return { error: result.error, submissionId: null }
+    return { error: result.error, submissionId: null, startedAt: null, extraSeconds: 0 }
   }
 
-  return { error: null, submissionId: result.submission!.id }
+  // started_at is the countdown's source of truth: seeding the client from
+  // it (not from Date.now()) keeps network latency out of the deadline and
+  // stops later polls from misreading that latency as an instructor grant.
+  return {
+    error: null,
+    submissionId: result.submission!.id,
+    startedAt: result.submission!.started_at,
+    extraSeconds: result.submission!.extra_seconds ?? 0,
+  }
 }
 
 export async function saveAnswerAction(

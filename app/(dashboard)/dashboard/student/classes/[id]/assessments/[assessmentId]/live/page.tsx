@@ -197,14 +197,20 @@ export default function StudentLivePage({
         dirtyRef.current && answerQuestionIdRef.current === view.currentQuestion.id
       if (!locallyEdited) {
         const saved = await getStudentLiveAnswerAction(view.session.id, view.currentQuestion.id)
-        if (seq === questionLoadSeqRef.current && saved) {
-          setAnswer({ questionId: view.currentQuestion.id, content: saved })
-          answerRef.current = saved
-          answerQuestionIdRef.current = view.currentQuestion.id
-        } else if (seq === questionLoadSeqRef.current) {
-          setAnswer({ questionId: view.currentQuestion.id, content: {} })
-          answerRef.current = {}
-          answerQuestionIdRef.current = view.currentQuestion.id
+        // Re-check after the await: typing during the fetch must win over the
+        // (now stale) server value.
+        const typedDuringFetch =
+          dirtyRef.current && answerQuestionIdRef.current === view.currentQuestion.id
+        if (seq === questionLoadSeqRef.current && !typedDuringFetch) {
+          if (saved) {
+            setAnswer({ questionId: view.currentQuestion.id, content: saved })
+            answerRef.current = saved
+            answerQuestionIdRef.current = view.currentQuestion.id
+          } else {
+            setAnswer({ questionId: view.currentQuestion.id, content: {} })
+            answerRef.current = {}
+            answerQuestionIdRef.current = view.currentQuestion.id
+          }
         }
       }
       setViewState('active')

@@ -14,6 +14,7 @@ import {
   gradeAnswer,
   expireSubmission,
   extendSubmissionTime,
+  getSubmissionsForAssessment,
 } from '@/lib/submission-service'
 import { computeDeadline } from '@/lib/deadline'
 import type { ParsedQuestion } from '@/lib/question-parser'
@@ -261,6 +262,60 @@ describe('score release', () => {
       expect(answer.score).toBeNull()
       expect(answer.questions.content.correctAnswer).toBeUndefined()
       expect(answer.questions.content.correctIndex).toBeUndefined()
+    }
+  })
+
+  test('per-question grading data stays hidden when reveal is on but scores are unreleased', async () => {
+    const { instructor, student, assessment } = await setupAssessment()
+    const { submission } = await startSubmission(student.id, assessment.id)
+    const questions = await getAssessmentQuestions(assessment.id)
+
+    await saveAnswer(submission!.id, questions[0].id, student.id, { selectedIndex: 1 })
+    await submitAssessment(submission!.id, student.id)
+
+    // Reveal ON, release OFF — per-question scores and feedback must not ship
+    // even though the answer key itself may.
+    await updateAssessmentSettings(assessment.id, instructor.id, { answer_reveal_enabled: true })
+
+    const results = await getStudentSubmissionResults(assessment.id, student.id)
+
+    expect(results!.resultStatus).toBe('hidden')
+    expect(results!.submission!.score_total).toBeNull()
+    for (const answer of results!.answers!) {
+      expect(answer.score).toBeNull()
+      expect(answer.is_correct).toBeNull()
+      expect(answer.feedback).toBeNull()
+    }
+    // The key follows its own gate (reveal), which is ON here: the MC
+    // answer's content keeps correctAnswer (Essay questions have none).
+    const mcAnswer = results!.answers!.find((a) => a.questions.type === 'MultipleChoice')!
+    expect(mcAnswer.questions.content.correctAnswer).toBeDefined()
+  })
+
+  test('the active submission payload carries no grading fields', async () => {
+    const { instructor, student, assessment } = await setupAssessment()
+    const questions = await getAssessmentQuestions(assessment.id)
+
+    const { submission } = await startSubmission(student.id, assessment.id)
+    await saveAnswer(submission!.id, questions[0].id, student.id, { selectedIndex: 1 })
+    await saveAnswer(submission!.id, questions[2].id, student.id, { text: 'Photosynthesis is...' })
+    await submitAssessment(submission!.id, student.id)
+
+    // Instructor grades the essay, then reopens the attempt with extra time:
+    // the manual grade persists server-side but must not reach the student.
+    const graded = await getSubmission(submission!.id, student.id)
+    const essayAnswer = graded!.answers.find((a) => a.question_id === questions[2].id)!
+    await gradeAnswer(essayAnswer.id, 4, 'Nice work', instructor.id)
+    await extendSubmissionTime(submission!.id, instructor.id, 5)
+
+    const active = await getActiveSubmission(student.id, assessment.id)
+    expect(active).not.toBeNull()
+    expect(active!.status).toBe('in_progress')
+    for (const answer of active!.answers) {
+      expect('score' in answer).toBe(false)
+      expect('is_correct' in answer).toBe(false)
+      expect('feedback' in answer).toBe(false)
+      expect(typeof answer.answer_content).toBe('object')
     }
   })
 
@@ -706,6 +761,71 @@ describe('time extensions (extra_seconds) on write paths', () => {
     expect(second.error).toBeNull()
     expect(second.submission!.extra_seconds).toBe(15 * 60)
     expect(second.submission!.status).toBe('in_progress')
+  })
+
+  test('the extra-seconds increment skips non-in-progress submissions', async () => {
+    const { instructor, student, assessment } = await setupAssessment()
+
+    const { submission } = await startSubmission(student.id, assessment.id)
+
+    const first = await extendSubmissionTime(submission!.id, instructor.id, 5)
+    expect(first.error).toBeNull()
+
+    // Simulate the attempt finishing right before another grant arrives:
+    // the guarded RPC must match zero rows instead of stacking seconds onto
+    // a dead submission.
+    const admin = getAdmin()
+    await admin.from('submissions').update({ status: 'submitted' }).eq('id', submission!.id)
+
+    const { data: skipped } = await admin.rpc('increment_extra_seconds', {
+      p_submission_id: submission!.id,
+      p_seconds: 60,
+    })
+    expect(skipped ?? []).toEqual([])
+
+    const { data: finishedRow } = await admin
+      .from('submissions')
+      .select('extra_seconds, status')
+      .eq('id', submission!.id)
+      .single()
+    expect(finishedRow!.extra_seconds).toBe(5 * 60)
+    expect(finishedRow!.status).toBe('submitted')
+
+    // While in progress, the same call increments atomically.
+    await admin.from('submissions').update({ status: 'in_progress' }).eq('id', submission!.id)
+    const { data: applied } = await admin.rpc('increment_extra_seconds', {
+      p_submission_id: submission!.id,
+      p_seconds: 60,
+    })
+    expect((applied ?? []).length).toBe(1)
+
+    const { data: activeRow } = await admin
+      .from('submissions')
+      .select('extra_seconds, status')
+      .eq('id', submission!.id)
+      .single()
+    expect(activeRow!.extra_seconds).toBe(6 * 60)
+    expect(activeRow!.status).toBe('in_progress')
+  })
+
+  test('listing refreshes rows the sweep expires so dialogs classify correctly', async () => {
+    const { student, assessment } = await setupAssessment()
+    const admin = getAdmin()
+
+    const { submission } = await startSubmission(student.id, assessment.id)
+
+    // Make the attempt overdue without changing its status; the listing sweep
+    // expires it server-side and the returned row must reflect that.
+    await admin
+      .from('submissions')
+      .update({ started_at: new Date(Date.now() - 31 * 60 * 1000).toISOString() })
+      .eq('id', submission!.id)
+
+    const list = await getSubmissionsForAssessment(assessment.id)
+
+    const row = list.submissions.find((s) => s.id === submission!.id)
+    expect(row).toBeDefined()
+    expect(row!.status).toBe('expired')
   })
 
   test('reopen transitions to in_progress, clears auto grades, keeps manual grades, and resets violations', async () => {

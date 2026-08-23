@@ -74,6 +74,35 @@ describe('proctoring violations', () => {
     expect(row!.status).toBe('in_progress')
   })
 
+  test('the violation RPC is not executable directly by an authenticated student', async () => {
+    const { student, assessment } = await setup()
+
+    const { submission } = await startSubmission(student.id, assessment.id)
+
+    // Call PostgREST as the signed-in student, bypassing the app entirely.
+    // EXECUTE on increment_violation is service-role-only, so this must fail
+    // on permissions rather than record anything.
+    const studentClient = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    )
+    const { data: auth } = await studentClient.auth.signInWithPassword({
+      email: student.email,
+      password: 'TestPass123!',
+    })
+    expect(auth.session).not.toBeNull()
+
+    const { error } = await studentClient.rpc('increment_violation', {
+      p_submission_id: submission!.id,
+      p_student_id: student.id,
+    })
+    expect(error).not.toBeNull()
+
+    const admin = getAdmin()
+    const { data: row } = await admin.from('submissions').select('violations').eq('id', submission!.id).single()
+    expect(row!.violations).toBe(0)
+  })
+
   test('concurrent violation increments are all counted', async () => {
     const { student, assessment } = await setup()
 

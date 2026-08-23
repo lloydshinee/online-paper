@@ -381,6 +381,38 @@ describe('live membership and end-of-session flush', () => {
     )
   }
 
+  test('concurrent joins into two different sessions admit exactly one', async () => {
+    const { instructor, student, assessment } = await setupMembership()
+
+    const { session: session1 } = await createLiveSession(instructor!.id, assessment!.id)
+
+    // A second live session requires a second assessment (one non-ended
+    // session per assessment), in a second class the same student joins.
+    const { class: cls2 } = await createClass(instructor.id, 'Membership Class 2')
+    await joinClass(student.id, cls2!.join_code)
+    const { assessment: assessment2 } = await createAssessment(instructor.id, cls2!.id, 'Second Live', 'live', undefined)
+    await setAssessmentQuestions(assessment2!.id, instructor.id, [qA])
+    await publishAssessment(assessment2!.id, instructor.id)
+    const { session: session2 } = await createLiveSession(instructor.id, assessment2!.id)
+
+    // The overlap trigger's per-student advisory lock serializes these: the
+    // second insert must observe the first committed membership instead of
+    // racing past the EXISTS probe.
+    const [first, second] = await Promise.all([
+      joinLiveSession(session1!.id, student.id),
+      joinLiveSession(session2!.id, student.id),
+    ])
+
+    expect([first.error, second.error].filter(Boolean).length).toBe(1)
+
+    const admin = getAdmin()
+    const { data: memberships } = await admin
+      .from('live_session_members')
+      .select('session_id')
+      .eq('student_id', student.id)
+    expect(memberships!.length).toBe(1)
+  })
+
   test('a student who joined but has not answered is blocked from a second session', async () => {
     const { instructor, student, assessment } = await setupMembership()
 

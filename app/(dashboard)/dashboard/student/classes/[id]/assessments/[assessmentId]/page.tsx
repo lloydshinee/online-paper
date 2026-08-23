@@ -106,6 +106,10 @@ export default function TakeAssessmentPage({
   const submissionIdRef = useRef<string | null>(null)
   const initRef = useRef(false)
   const deadlineRef = useRef<number | null>(null)
+  // Server truth for the extension counter. The banner fires on changes to
+  // THIS value, never on countdown diffs — network latency makes a later
+  // server deadline look like a grant otherwise.
+  const extraSecondsRef = useRef(0)
   const autoExpiringRef = useRef(false)
   const submittedRef = useRef(false)
   const latestAnswersRef = useRef<Record<string, Record<string, unknown>>>({})
@@ -158,14 +162,15 @@ export default function TakeAssessmentPage({
       return false
     }
 
-    const currentRemaining = currentDeadline == null ? 0 : remainingSeconds(currentDeadline, Date.now())
+    const grantedDelta = extraSeconds - extraSecondsRef.current
     deadlineRef.current = deadline
+    extraSecondsRef.current = extraSeconds
     setTimeLeft(remaining)
 
-    if (currentDeadline != null) {
-      showExtensionBanner(remaining - currentRemaining)
-    } else if (extraSeconds > 0) {
-      showExtensionBanner(extraSeconds)
+    // Announce only real grants. A later deadline with an unchanged counter
+    // is ordinary clock convergence (fresh-start latency), not extra time.
+    if (grantedDelta > 0) {
+      showExtensionBanner(grantedDelta)
     }
 
     return true
@@ -314,6 +319,7 @@ export default function TakeAssessmentPage({
           if (data.timeLimit) {
             const deadline = computeDeadline(active.started_at, data.timeLimit, active.extra_seconds ?? 0)
             deadlineRef.current = deadline
+            extraSecondsRef.current = active.extra_seconds ?? 0
             const remaining = remainingSeconds(deadline, Date.now())
             setTimeLeft(remaining)
             if ((active.extra_seconds ?? 0) > 0) {
@@ -372,8 +378,9 @@ export default function TakeAssessmentPage({
         setQuestions(data.questions)
 
         if (data.timeLimit) {
-          // Fresh start: deadline = now + duration.
-          deadlineRef.current = computeDeadline(Date.now(), data.timeLimit)
+          // Optimistic pre-start display only; the authoritative deadline is
+          // seeded from the server's started_at below, before the timer can
+          // ever read it (viewMode is still 'loading').
           setTimeLeft(data.timeLimit * 60)
         }
 
@@ -381,6 +388,14 @@ export default function TakeAssessmentPage({
         if (startResult.submissionId) {
           setSubmissionId(startResult.submissionId)
           submissionIdRef.current = startResult.submissionId
+
+          if (data.timeLimit && startResult.startedAt) {
+            const deadline = computeDeadline(startResult.startedAt, data.timeLimit, startResult.extraSeconds)
+            deadlineRef.current = deadline
+            extraSecondsRef.current = startResult.extraSeconds
+            setTimeLeft(remainingSeconds(deadline, Date.now()))
+          }
+
           setViewMode('take')
           setLoading(false)
         } else {

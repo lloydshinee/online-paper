@@ -117,7 +117,14 @@ beforeEach(() => {
     questions,
     timeLimit: null,
   })
-  actions.startAssessmentAction.mockResolvedValue({ error: null, submissionId: 'sub-1' })
+  actions.startAssessmentAction.mockResolvedValue({
+    error: null,
+    submissionId: 'sub-1',
+    // Server-authoritative start time; the countdown seeds from this, not
+    // from Date.now() (see adoptServerRemainingTime / extraSecondsRef).
+    startedAt: new Date('2026-08-17T12:00:00.000Z').toISOString(),
+    extraSeconds: 0,
+  })
   actions.getSubmissionHistoryAction.mockResolvedValue([])
   actions.getRemainingTimeAction.mockResolvedValue({ error: null, remainingSeconds: 600, extraSeconds: 0, overdue: false, deadline: Date.now() + 600_000 })
   actions.expireAssessmentAction.mockResolvedValue({ error: null, submission: { id: 'sub-1', extra_seconds: 0, status: 'expired' }, overdue: true, remainingSeconds: 0, deadline: null })
@@ -232,6 +239,61 @@ describe('timed assessment take page', () => {
 
     expect(screen.getByText('03:00')).toBeDefined()
     expect(screen.getByText('Instructor added 2 min')).toBeDefined()
+  })
+
+  test('a later server deadline with an unchanged grant counter stays silent', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-17T12:00:00.000Z'))
+
+    actions.startAssessmentAction.mockResolvedValue({
+      error: null,
+      submissionId: 'sub-1',
+      startedAt: new Date('2026-08-17T12:00:00.000Z').toISOString(),
+      extraSeconds: 0,
+    })
+    actions.getAssessmentData.mockResolvedValue({
+      error: null,
+      assessment: assessmentInfo,
+      questions,
+      timeLimit: 30,
+    })
+    // First poll: ordinary clock convergence — the server deadline sits a
+    // few seconds later than the seeded one, but nothing was granted.
+    actions.getRemainingTimeAction
+      .mockResolvedValueOnce({
+        error: null,
+        remainingSeconds: 1795,
+        extraSeconds: 0,
+        overdue: false,
+        deadline: new Date('2026-08-17T12:30:05.000Z').getTime(),
+      })
+      .mockResolvedValue({
+        error: null,
+        remainingSeconds: 1905,
+        extraSeconds: 120,
+        overdue: false,
+        deadline: new Date('2026-08-17T12:32:05.000Z').getTime(),
+      })
+
+    renderPage()
+    await flushPromises()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000)
+    })
+    await flushPromises()
+
+    expect(screen.getByText('29:55')).toBeDefined()
+    expect(screen.queryByText(/Instructor added/)).toBeNull()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000)
+    })
+    await flushPromises()
+
+    // A real grant still announces, sized by the granted delta.
+    expect(screen.getByText('Instructor added 2 min')).toBeDefined()
+    expect(screen.getByText('31:45')).toBeDefined()
   })
 
   test('stale zero timer does not submit when the server says not overdue', async () => {
