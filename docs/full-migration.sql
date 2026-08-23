@@ -221,6 +221,12 @@ create index live_session_members_student_idx on public.live_session_members (st
 -- Atomically increment a submission's violation counter (proctoring).
 -- Returns the updated row only when the caller owns the submission and it is
 -- still in progress; otherwise returns no rows.
+--
+-- p_student_id is the server-verified caller (the Next.js action passes
+-- auth.userId); it is NOT trusted from the wire. EXECUTE is revoked from the
+-- default PUBLIC grant so only the service role — the sole caller, via the
+-- submission service — can invoke this function. A NULL p_student_id can
+-- never bypass the ownership check.
 create or replace function public.increment_violation(p_submission_id uuid, p_student_id uuid)
 returns table (violations int, status text, assessment_id uuid)
 language plpgsql
@@ -238,7 +244,8 @@ begin
     return;
   end if;
   -- Ownership binding: only the submission's own student can record violations.
-  if v_owner <> p_student_id then
+  -- IS DISTINCT FROM keeps a NULL argument from silently passing the check.
+  if p_student_id is null or v_owner is distinct from p_student_id then
     return;
   end if;
   -- Ignore submissions that are not in progress.
@@ -253,8 +260,38 @@ begin
       returning public.submissions.violations, public.submissions.status, public.submissions.assessment_id;
 end;
 $$;
+revoke execute on function public.increment_violation(uuid, uuid) from public;
+revoke execute on function public.increment_violation(uuid, uuid) from anon;
+revoke execute on function public.increment_violation(uuid, uuid) from authenticated;
+grant execute on function public.increment_violation(uuid, uuid) to service_role;
+
+-- Atomically add instructor-granted time to an IN PROGRESS attempt.
+-- Returns the updated row; returns no rows when the submission is not
+-- currently in progress (finished or concurrently submitted/expired), which
+-- the caller surfaces as an explicit error instead of a silent mis-grant.
+-- Service-role only: the grant path is instructor-driven through server code.
+create or replace function public.increment_extra_seconds(p_submission_id uuid, p_seconds integer)
+returns setof public.submissions
+language sql
+security definer
+set search_path = ''
+as $$
+  update public.submissions
+    set extra_seconds = public.submissions.extra_seconds + p_seconds
+    where public.submissions.id = p_submission_id
+      and public.submissions.status = 'in_progress'
+    returning *;
+$$;
+revoke execute on function public.increment_extra_seconds(uuid, integer) from public;
+revoke execute on function public.increment_extra_seconds(uuid, integer) from anon;
+revoke execute on function public.increment_extra_seconds(uuid, integer) from authenticated;
+grant execute on function public.increment_extra_seconds(uuid, integer) to service_role;
 
 -- A student cannot participate in two overlapping (non-ended) live sessions.
+-- The advisory lock serializes concurrent inserts per student: without it,
+-- two simultaneous joins into different sessions both pass the EXISTS probe
+-- under READ COMMITTED and both insert (the unique constraint spans only
+-- one session).
 create or replace function public.check_live_membership_overlap()
 returns trigger
 language plpgsql
@@ -262,6 +299,7 @@ security definer
 set search_path = ''
 as $$
 begin
+  perform pg_advisory_xact_lock(hashtextextended(new.student_id::text, 0));
   if exists (
     select 1
     from public.live_session_members m
@@ -516,13 +554,12 @@ create policy "Instructors can manage questions for their assessments" on public
     where a.id = questions.assessment_id and c.instructor_id = auth.uid()
   ));
 
-create policy "Students can read questions for enrolled class assessments" on public.questions
-  for select
-  using (exists (
-    select 1 from public.assessments a
-    join public.class_enrollments ce on ce.class_id = a.class_id
-    where a.id = questions.assessment_id and ce.student_id = auth.uid()
-  ));
+-- Students have NO direct policies on questions: `content` jsonb carries the
+-- answer key (correctAnswer / correctIndex), and a row-level policy can only
+-- filter rows, never columns. Students receive questions exclusively through
+-- server actions that sanitize before responding. Direct PostgREST reads by
+-- students are denied by default; any future client-side need must go
+-- through a sanitized view or server action instead.
 
 -- submissions
 create policy "Admins view all submissions" on public.submissions
@@ -537,9 +574,11 @@ create policy "Instructors view submissions for their class assessments" on publ
     where a.id = submissions.assessment_id and c.instructor_id = auth.uid()
   ));
 
-create policy "Students manage own submissions" on public.submissions
-  for all
-  using (auth.uid() = student_id);
+-- Students have NO direct policies on submissions: rows carry score_total,
+-- violations, and extra_seconds, which must stay hidden until the instructor
+-- releases scores. All student reads and writes flow through server actions
+-- on the service-role client; direct PostgREST reads by students are denied
+-- by default (same rationale as questions / live_session_members).
 
 -- answers
 create policy "Admins view all answers" on public.answers
@@ -555,12 +594,11 @@ create policy "Instructors view answers for their classes" on public.answers
     where s.id = answers.submission_id and c.instructor_id = auth.uid()
   ));
 
-create policy "Students manage own answers" on public.answers
-  for all
-  using (exists (
-    select 1 from public.submissions
-    where submissions.id = answers.submission_id and submissions.student_id = auth.uid()
-  ));
+-- Students have NO direct policies on answers: rows carry score, is_correct,
+-- and feedback, which stay hidden until the instructor releases scores (and,
+-- for per-question data, enables answer reveal). All student reads and
+-- writes flow through server actions on the service-role client; direct
+-- PostgREST reads by students are denied by default.
 
 -- live_sessions
 create policy "Admins manage all live_sessions" on public.live_sessions
