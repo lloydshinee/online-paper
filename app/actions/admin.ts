@@ -255,7 +255,8 @@ export async function getAdminClassStudents(
 
   const students = ((usersRes.data ?? []) as Array<{ id: string; firstname: string | null; lastname: string | null; email: string | null }>).map((u) => ({
     id: u.id,
-    name: [u.firstname, u.lastname].filter(Boolean).join(' ') || 'Unknown',
+    // Surname-first for student lists.
+    name: [u.lastname, u.firstname].filter(Boolean).join(' ') || 'Unknown',
     email: u.email ?? '',
     submission_status: subMap.get(u.id)?.status ?? null,
     score_total: subMap.get(u.id)?.score_total ?? null,

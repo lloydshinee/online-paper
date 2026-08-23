@@ -833,7 +833,8 @@ export async function getSubmissionsForAssessment(
       student_name: (() => {
         const st = studentMap.get(s.student_id)
         if (!st) return 'Unknown'
-        return [st.firstname, st.lastname].filter(Boolean).join(' ') || 'Unknown'
+        // Surname-first for student lists: sorts and scans by family name.
+        return [st.lastname, st.firstname].filter(Boolean).join(' ') || 'Unknown'
       })(),
       student_email: studentMap.get(s.student_id)?.email ?? 'Unknown',
       pending_count: pendingBySubmission.get(s.id) ?? 0,

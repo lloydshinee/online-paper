@@ -129,7 +129,8 @@ export function StudentRoster({ classId, initialCount }: { classId: string; init
           ) : (
             <div className="divide-y divide-border -mx-6">
               {students.map((s) => {
-                const name = [s.firstname, s.lastname].filter(Boolean).join(' ') || 'Unknown'
+                // Surname-first for student lists.
+                const name = [s.lastname, s.firstname].filter(Boolean).join(' ') || 'Unknown'
                 return (
                   <div key={s.id} className="px-6 py-3 flex items-center justify-between gap-4">
                     <div className="min-w-0">

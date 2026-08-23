@@ -10,7 +10,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from '@/components/ui/button'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import type { SubmissionData, SubmissionDetail } from './types'
-import { getLastName } from './types'
 import GradingPanel from './grading-panel'
 import { copyToClipboard } from '@/lib/utils'
 
@@ -67,7 +66,8 @@ export default function SubmissionsTab({ assessmentId, assessmentMode }: Submiss
 
   async function loadSubmissions() {
     const { submissions: subs, total } = await getAssessmentSubmissions(assessmentId, 1000, 0, submissionSearch || undefined)
-    subs.sort((a, b) => getLastName(a.student_name).localeCompare(getLastName(b.student_name)))
+    subs.sort(// student_name is surname-first, so a plain compare sorts by family name.
+        (a, b) => a.student_name.localeCompare(b.student_name))
     setSubmissions(subs)
     setSubmissionTotal(total)
   }
@@ -77,7 +77,8 @@ export default function SubmissionsTab({ assessmentId, assessmentMode }: Submiss
     async function fetch() {
       const { submissions: subs, total } = await getAssessmentSubmissions(assessmentId, 1000, 0, submissionSearch || undefined)
       if (ignore) return
-      subs.sort((a, b) => getLastName(a.student_name).localeCompare(getLastName(b.student_name)))
+      subs.sort(// student_name is surname-first, so a plain compare sorts by family name.
+        (a, b) => a.student_name.localeCompare(b.student_name))
       setSubmissions(subs)
       setSubmissionTotal(total)
     }
@@ -169,7 +170,8 @@ export default function SubmissionsTab({ assessmentId, assessmentMode }: Submiss
 
   async function refreshStudentDialog(targetStudentId?: string) {
     const { submissions: subs, total } = await getAssessmentSubmissions(assessmentId, 1000, 0, submissionSearch || undefined)
-    subs.sort((a, b) => getLastName(a.student_name).localeCompare(getLastName(b.student_name)))
+    subs.sort(// student_name is surname-first, so a plain compare sorts by family name.
+        (a, b) => a.student_name.localeCompare(b.student_name))
     setSubmissions(subs)
     setSubmissionTotal(total)
 
