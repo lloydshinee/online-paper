@@ -4,6 +4,30 @@ import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { avatarObjectPath, avatarSrc } from '@/lib/avatar'
+import { requireAuth } from '@/lib/auth/require-auth'
+
+export interface CurrentUserProfile {
+  firstname: string | null
+  lastname: string | null
+  email: string
+  avatar_url: string | null
+}
+
+/**
+ * The signed-in user's own profile. Client pages must derive the header's
+ * identity from this action — never by scanning user lists, where "first
+ * row" is an arbitrary account (newest registration) rather than the caller.
+ */
+export async function getCurrentUserProfileAction(): Promise<CurrentUserProfile | null> {
+  const user = await requireAuth()
+
+  return {
+    firstname: user.firstname ?? null,
+    lastname: user.lastname ?? null,
+    email: user.email,
+    avatar_url: user.avatar_url ?? null,
+  }
+}
 
 export async function updateProfileAction(
   prevState: { error?: string; success?: string } | null,

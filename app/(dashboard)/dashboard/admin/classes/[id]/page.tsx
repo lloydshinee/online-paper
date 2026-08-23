@@ -2,7 +2,8 @@
 
 import { useState, useEffect, use, useCallback } from 'react'
 import DashboardHeader from '@/components/dashboard-header'
-import { getAdminClassAssessments, getAdminClassStudents, getUsers } from '@/app/actions/admin'
+import { getAdminClassAssessments, getAdminClassStudents } from '@/app/actions/admin'
+import { getCurrentUserProfileAction } from '@/app/actions/profile'
 import { DataTablePagination } from '@/components/data-table-pagination'
 import { Input } from '@/components/ui/input'
 import { ArrowLeft, Search } from 'lucide-react'
@@ -50,14 +51,15 @@ export default function AdminClassPage({
   const [loadingStudents, setLoadingStudents] = useState(false)
 
   useEffect(() => {
-    getUsers(1, 0).then((r) => {
-      if ('users' in r && r.users.length > 0) {
-        const admin = r.users[0]
-        setUserName([admin.firstname, admin.lastname].filter(Boolean).join(' ') || '')
-        setUserFirstname(admin.firstname)
-        setUserLastname(admin.lastname)
-        setUserEmail(admin.email)
-        setUserAvatarUrl(admin.avatar_url ?? null)
+    // The header's identity comes from the session, never from user lists:
+    // the first row of getUsers() is whoever registered most recently.
+    getCurrentUserProfileAction().then((profile) => {
+      if (profile) {
+        setUserName([profile.firstname, profile.lastname].filter(Boolean).join(' ') || 'Admin')
+        setUserFirstname(profile.firstname)
+        setUserLastname(profile.lastname)
+        setUserEmail(profile.email)
+        setUserAvatarUrl(profile.avatar_url)
       }
     })
     getAdminClassAssessments(classId).then((r) => {

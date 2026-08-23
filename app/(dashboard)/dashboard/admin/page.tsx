@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef, startTransition } from 'react'
 import DashboardHeader from '@/components/dashboard-header'
 import { getUsers, getSystemOverview } from '@/app/actions/admin'
+import { getCurrentUserProfileAction } from '@/app/actions/profile'
 import { CreateUserDialog } from './create-user-dialog'
 import { UserTable } from './user-table'
 import { DataTablePagination } from '@/components/data-table-pagination'
@@ -57,18 +58,21 @@ export default function AdminDashboard() {
     if (requestId !== userRequestIdRef.current) return // superseded
     setUsers(r.users)
     setUserTotal(r.total)
-    if (page === 1) {
-      const r0 = await getUsers(1, 0)
-      if (requestId !== userRequestIdRef.current) return
-      const found = r0.users.find((u) => u.role === 'admin')
-      if (found) {
-        setUserName([found.firstname, found.lastname].filter(Boolean).join(' ') || 'Admin')
-        setUserFirstname(found.firstname)
-        setUserLastname(found.lastname)
-        setUserEmail(found.email)
-        setUserAvatarUrl(found.avatar_url ?? null)
-      }
-    }
+  }, [])
+
+  useEffect(() => {
+    // The header's identity comes from the session, never from user lists:
+    // the first rows of getUsers() are whoever registered most recently.
+    let cancelled = false
+    getCurrentUserProfileAction().then((profile) => {
+      if (cancelled || !profile) return
+      setUserName([profile.firstname, profile.lastname].filter(Boolean).join(' ') || 'Admin')
+      setUserFirstname(profile.firstname)
+      setUserLastname(profile.lastname)
+      setUserEmail(profile.email)
+      setUserAvatarUrl(profile.avatar_url)
+    })
+    return () => { cancelled = true }
   }, [])
 
   useEffect(() => {
@@ -81,14 +85,6 @@ export default function AdminDashboard() {
       if (cancelled || requestId !== userRequestIdRef.current) return
       setUsers(r.users)
       setUserTotal(r.total)
-      const found = r.users.find((u) => u.role === 'admin')
-      if (found) {
-        setUserName([found.firstname, found.lastname].filter(Boolean).join(' ') || 'Admin')
-        setUserFirstname(found.firstname)
-        setUserLastname(found.lastname)
-        setUserEmail(found.email)
-        setUserAvatarUrl(found.avatar_url ?? null)
-      }
     }
     run()
     return () => { cancelled = true }
