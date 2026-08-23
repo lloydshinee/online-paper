@@ -222,7 +222,6 @@ export async function getAdminClassStudents(
   let enrollQuery = supabase.from('class_enrollments')
     .select('student_id')
     .eq('class_id', classId)
-    .range(offset, offset + limit - 1)
 
   if (search) {
     const { data: matchingUsers } = await supabase
@@ -232,8 +231,13 @@ export async function getAdminClassStudents(
 
     const matchingIds = (matchingUsers ?? []).map((u) => u.id)
     if (matchingIds.length === 0) return { students: [], total: 0 }
+
+    // Filter before windowing: slicing first made every student beyond the
+    // current page invisible to search.
     enrollQuery = enrollQuery.in('student_id', matchingIds)
   }
+
+  enrollQuery = enrollQuery.order('student_id').range(offset, offset + limit - 1)
 
   const { data: enrollments } = await enrollQuery
 

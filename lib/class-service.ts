@@ -241,12 +241,13 @@ export async function getClassRosterPaginated(
 
   const { count } = await countQuery
 
-  // Get student IDs with pagination
+  // Get student IDs with pagination — filter first, then order for a stable
+  // window; slicing before the search filter hid every match beyond the
+  // current page.
   let enrollQuery = supabase
     .from('class_enrollments')
     .select('student_id')
     .eq('class_id', classId)
-    .range((page - 1) * pageSize, page * pageSize - 1)
 
   if (search) {
     const { data: matchingUsers } = await supabase
@@ -258,6 +259,10 @@ export async function getClassRosterPaginated(
     if (matchingIds.length === 0) return { students: [], total: 0, error: null }
     enrollQuery = enrollQuery.in('student_id', matchingIds)
   }
+
+  enrollQuery = enrollQuery
+    .order('student_id')
+    .range((page - 1) * pageSize, page * pageSize - 1)
 
   const { data: enrollments } = await enrollQuery
 
