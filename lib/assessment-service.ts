@@ -20,7 +20,7 @@ export interface DashboardAssessment {
   submission: { status: string; score_total: number | null } | null
 }
 
-const ASSESSMENT_SELECT = 'id, class_id, title, mode, state, duration_minutes, scores_released, answer_reveal_enabled, accepting_submissions, retakes_allowed, created_at'
+const ASSESSMENT_SELECT = 'id, class_id, title, mode, state, duration_minutes, passing_score, scores_released, answer_reveal_enabled, accepting_submissions, retakes_allowed, created_at'
 
 type AssessmentForMap = { id: string; mode: string; duration_minutes: number | null; scores_released?: boolean }
 type SubmissionForMap = { assessment_id: string; status: string; score_total: number | null; started_at: string; extra_seconds?: number }
@@ -78,6 +78,7 @@ export interface AssessmentData {
   mode: 'timed' | 'live'
   state: 'draft' | 'active' | 'closed'
   duration_minutes: number | null
+  passing_score: number | null
   scores_released: boolean
   answer_reveal_enabled: boolean
   accepting_submissions: boolean
@@ -590,6 +591,7 @@ export async function updateAssessmentSettings(
     title?: string
     mode?: 'timed' | 'live'
     duration_minutes?: number | null
+    passing_score?: number | null
     scores_released?: boolean
     answer_reveal_enabled?: boolean
     accepting_submissions?: boolean
@@ -613,10 +615,19 @@ export async function updateAssessmentSettings(
     return { assessment: null, error: 'Assessment not found' }
   }
 
+  if (
+    updates.passing_score !== undefined &&
+    updates.passing_score !== null &&
+    (!Number.isInteger(updates.passing_score) || updates.passing_score < 0 || updates.passing_score > 100)
+  ) {
+    return { assessment: null, error: 'Passing score must be an integer between 0 and 100' }
+  }
+
   const updateData: Record<string, unknown> = {}
   if (updates.title !== undefined) updateData.title = updates.title
   if (updates.mode !== undefined) updateData.mode = updates.mode
   if (updates.duration_minutes !== undefined) updateData.duration_minutes = updates.duration_minutes
+  if (updates.passing_score !== undefined) updateData.passing_score = updates.passing_score
   if (updates.scores_released !== undefined) updateData.scores_released = updates.scores_released
   if (updates.answer_reveal_enabled !== undefined) updateData.answer_reveal_enabled = updates.answer_reveal_enabled
   if (updates.accepting_submissions !== undefined) updateData.accepting_submissions = updates.accepting_submissions

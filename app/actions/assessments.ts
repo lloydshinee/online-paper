@@ -173,6 +173,7 @@ export async function updateAssessmentSettingsAction(
     title?: string
     mode?: 'timed' | 'live'
     duration_minutes?: number | null
+    passing_score?: number | null
     scores_released?: boolean
     answer_reveal_enabled?: boolean
     accepting_submissions?: boolean

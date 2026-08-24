@@ -28,6 +28,7 @@ export default function SettingsTab({ assessmentId, classId, assessment, onAsses
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleInput, setTitleInput] = useState(assessment.title)
   const [settingsDuration, setSettingsDuration] = useState(assessment.duration_minutes?.toString() ?? '')
+  const [settingsPassingScore, setSettingsPassingScore] = useState(assessment.passing_score?.toString() ?? '')
   const [scoresReleased, setScoresReleased] = useState(assessment.scores_released ?? false)
   const [answerRevealed, setAnswerRevealed] = useState(assessment.answer_reveal_enabled ?? false)
   const [acceptingSubmissions, setAcceptingSubmissions] = useState(assessment.accepting_submissions ?? true)
@@ -82,6 +83,7 @@ export default function SettingsTab({ assessmentId, classId, assessment, onAsses
       toast.error(result.error)
       const current = await getAssessmentWithQuestions(assessmentId).catch(() => null)
       if (current?.assessment) {
+        setSettingsPassingScore(current.assessment.passing_score?.toString() ?? '')
         setScoresReleased(current.assessment.scores_released)
         setAnswerRevealed(current.assessment.answer_reveal_enabled)
         setAcceptingSubmissions(current.assessment.accepting_submissions)
@@ -89,6 +91,7 @@ export default function SettingsTab({ assessmentId, classId, assessment, onAsses
       }
     } else if (result.assessment) {
       onAssessmentUpdate(result.assessment)
+      setSettingsPassingScore(result.assessment.passing_score?.toString() ?? '')
       setScoresReleased(result.assessment.scores_released)
       setAnswerRevealed(result.assessment.answer_reveal_enabled)
       setAcceptingSubmissions(result.assessment.accepting_submissions)
@@ -176,6 +179,29 @@ export default function SettingsTab({ assessmentId, classId, assessment, onAsses
                 className="w-24 h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring" />
             </div>
           )}
+
+          {/* Passing score */}
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="settings-passing-score" className="text-xs text-muted-foreground">Passing score (%)</label>
+            <input id="settings-passing-score" type="number" min="0" max="100" step="1"
+              value={settingsPassingScore}
+              onChange={(e) => setSettingsPassingScore(e.target.value)}
+              onBlur={() => {
+                const raw = settingsPassingScore.trim()
+                if (raw === '') {
+                  if (assessment.passing_score !== null) saveSetting({ passing_score: null })
+                  return
+                }
+                const score = Number(raw)
+                if (!Number.isInteger(score) || score < 0 || score > 100) {
+                  toast.error('Passing score must be an integer between 0 and 100')
+                  return
+                }
+                if (score !== assessment.passing_score) saveSetting({ passing_score: score })
+              }}
+              className="w-24 h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring" />
+            <p className="text-xs text-muted-foreground">Optional. Leave blank for no pass/fail threshold.</p>
+          </div>
 
           {/* Score release */}
           <div className={`flex items-center justify-between py-1 ${isDraft ? 'opacity-40 pointer-events-none' : ''}`}>
