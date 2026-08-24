@@ -441,3 +441,8 @@ describe('retake confirm gate', () => {
     expect(actions.startAssessmentAction).toHaveBeenCalledWith('assessment-1', false)
   })
 })
+
+vi.mock('@/components/use-current-user-profile', () => ({
+  useCurrentUserProfile: () => null,
+  profileDisplayName: () => 'Test User',
+}))
