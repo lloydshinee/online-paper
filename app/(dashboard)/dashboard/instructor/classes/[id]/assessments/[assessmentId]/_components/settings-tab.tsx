@@ -189,7 +189,7 @@ export default function SettingsTab({ assessmentId, classId, assessment, onAsses
               onBlur={() => {
                 const raw = settingsPassingScore.trim()
                 if (raw === '') {
-                  if (assessment.passing_score !== null) saveSetting({ passing_score: null })
+                  if (assessment.passing_score != null) saveSetting({ passing_score: null })
                   return
                 }
                 const score = Number(raw)
