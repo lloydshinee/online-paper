@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useMemo, useTransition } from 'react'
 import { toast } from 'sonner'
-import { getAssessmentSubmissions, getSubmissionDetail } from '@/app/actions/grading'
+import { getAssessmentSubmissions, getSubmissionDetail, deleteSubmissionAction } from '@/app/actions/grading'
 import * as timedAssessmentActions from '@/app/actions/timed-assessment'
-import { Search, Eye, Check, ClipboardList, AlertCircle, Clock3 } from 'lucide-react'
+import { Search, Eye, Check, ClipboardList, AlertCircle, Clock3, Trash2 } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
@@ -62,6 +62,8 @@ export default function SubmissionsTab({ assessmentId, assessmentMode }: Submiss
   const [customMinutes, setCustomMinutes] = useState('')
   const [timeError, setTimeError] = useState<string | null>(null)
   const [showReopenWarning, setShowReopenWarning] = useState(false)
+  const [deleteAttempt, setDeleteAttempt] = useState<SubmissionData | null>(null)
+  const [deleteAllTarget, setDeleteAllTarget] = useState<StudentGroup | null>(null)
   const [isPending, startTransition] = useTransition()
 
   async function loadSubmissions() {
@@ -261,6 +263,56 @@ export default function SubmissionsTab({ assessmentId, assessmentMode }: Submiss
     setShowReopenWarning(true)
   }
 
+  function closeDeleteConfirm() {
+    setDeleteAttempt(null)
+    setDeleteAllTarget(null)
+  }
+
+  function confirmDeleteAttempt() {
+    if (!deleteAttempt || isPending) return
+
+    const target = deleteAttempt
+    startTransition(async () => {
+      const result = await deleteSubmissionAction(target.id)
+      await refreshStudentDialog(target.student_id)
+
+      if (result.error) {
+        toast.error(result.error)
+        return
+      }
+
+      toast.success('Attempt deleted')
+      closeDeleteConfirm()
+    })
+  }
+
+  function confirmDeleteAll() {
+    if (!deleteAllTarget || isPending) return
+
+    const student = deleteAllTarget
+    startTransition(async () => {
+      let deleted = 0
+      let firstError: string | null = null
+      for (const attempt of student.submissions) {
+        const result = await deleteSubmissionAction(attempt.id)
+        if (result.error) {
+          firstError = result.error
+          break
+        }
+        deleted += 1
+      }
+      await refreshStudentDialog(student.studentId)
+
+      if (firstError) {
+        toast.error(firstError)
+        return
+      }
+
+      toast.success(`${deleted} attempt${deleted !== 1 ? 's' : ''} deleted`)
+      closeDeleteConfirm()
+    })
+  }
+
   if (viewingSubmission) {
     return (
       <div>
@@ -430,10 +482,25 @@ export default function SubmissionsTab({ assessmentId, assessmentMode }: Submiss
                       className="inline-flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-xs hover:bg-muted transition-colors">
                       <Eye size={12} /> View
                     </button>
+                    <button onClick={() => setDeleteAttempt(s)}
+                      className="inline-flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-xs text-destructive hover:bg-destructive/10 transition-colors">
+                      <Trash2 size={12} /> Delete
+                    </button>
                   </div>
                 </div>
               </div>
             ))}
+          </div>
+          <div className="border-t border-border -mx-6 px-6 py-3 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-medium text-destructive">Danger zone</p>
+              <p className="text-xs text-muted-foreground">Deleting every attempt returns this student to never-taken.</p>
+            </div>
+            <button onClick={() => setDeleteAllTarget(viewingStudent)}
+              disabled={isPending}
+              className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50">
+              <Trash2 size={12} /> Delete all attempts
+            </button>
           </div>
         </DialogContent>
       </Dialog>
@@ -502,6 +569,41 @@ export default function SubmissionsTab({ assessmentId, assessmentMode }: Submiss
             <AlertDialogAction onClick={() => void submitGrantTime()} disabled={isPending}>
               Re-open and add time
             </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={deleteAttempt !== null || deleteAllTarget !== null} onOpenChange={(open) => { if (!open) closeDeleteConfirm() }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{deleteAllTarget ? 'Delete all attempts?' : 'Delete this attempt?'}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {(() => {
+                const targets = deleteAllTarget?.submissions ?? (deleteAttempt ? [deleteAttempt] : [])
+                const count = targets.length
+                return (
+                  <>
+                    This permanently removes {count === 1 ? 'the attempt' : `all ${count} attempts`} and their answers.
+                    Deleting the student&rsquo;s only attempt returns them to never-taken, so they can take the assessment again regardless of the retakes setting. This action cannot be undone.
+                    {targets.some((s) => s.status === 'in_progress') && (
+                      <> The student may be answering right now &mdash; they will be stopped and will be able to start over.</>
+                    )}
+                  </>
+                )
+              })()}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isPending}>Cancel</AlertDialogCancel>
+            {deleteAllTarget ? (
+              <AlertDialogAction onClick={() => confirmDeleteAll()} disabled={isPending}>
+                Yes, delete all
+              </AlertDialogAction>
+            ) : (
+              <AlertDialogAction onClick={() => confirmDeleteAttempt()} disabled={isPending}>
+                Yes, delete attempt
+              </AlertDialogAction>
+            )}
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
