@@ -9,6 +9,7 @@ import {
   deleteAssessment,
   getClassAssessments,
   setAssessmentQuestions,
+  getAssessmentWithQuestions,
   getStudentAssessments,
   getAllStudentAssessments,
   getAssessmentQuestions,
@@ -530,5 +531,91 @@ describe('sanitized student question reads', () => {
 
     expect(questions[0].content.correctAnswer).toBe('4')
     expect(questions[0].content.correctIndex).toBe(1)
+  })
+})
+
+describe('passing score settings', () => {
+  async function setupWithSubmission() {
+    const instructorEmail = `test-pass-instr-${Date.now()}@example.com`
+    const studentEmail = `test-pass-stu-${Date.now()}@example.com`
+    testEmails.push(instructorEmail, studentEmail)
+
+    const { user: instructor } = await createUser(instructorEmail, 'TestPass123!', 'Test', 'Instructor', 'instructor')
+    const { user: student } = await createUser(studentEmail, 'TestPass123!', 'Test', 'Student', 'student')
+    const { class: cls } = await createClass(instructor!.id, 'Passing Score Class')
+    testClassIds.push(cls!.id)
+    await joinClass(student!.id, cls!.join_code)
+
+    const { assessment } = await createAssessment(instructor!.id, cls!.id, 'Passing Score Assessment', 'timed', 30)
+    await setAssessmentQuestions(assessment!.id, instructor!.id, sampleQuestions)
+    await publishAssessment(assessment!.id, instructor!.id)
+
+    const { submission } = await startSubmission(student!.id, assessment!.id)
+    const questions = await getAssessmentQuestions(assessment!.id)
+    await saveAnswer(submission!.id, questions[0].id, student!.id, { selectedIndex: 1 })
+    await saveAnswer(submission!.id, questions[1].id, student!.id, { value: true })
+    await submitAssessment(submission!.id, student!.id)
+
+    return { instructor: instructor!, student: student!, class: cls!, assessment: assessment! }
+  }
+
+  test('saves a passing score that persists across reloads and clears back to blank', async () => {
+    const { instructor, assessment } = await setupWithSubmission()
+
+    // New assessments have no threshold.
+    expect((await getAssessmentWithQuestions(assessment.id)).assessment!.passing_score).toBeNull()
+
+    const saved = await updateAssessmentSettings(assessment.id, instructor.id, { passing_score: 75 })
+    expect(saved.error).toBeNull()
+    expect(saved.assessment!.passing_score).toBe(75)
+
+    // Persists across a fresh read.
+    expect((await getAssessmentWithQuestions(assessment.id)).assessment!.passing_score).toBe(75)
+
+    // Survives re-editing to another valid value.
+    await updateAssessmentSettings(assessment.id, instructor.id, { passing_score: 60 })
+    expect((await getAssessmentWithQuestions(assessment.id)).assessment!.passing_score).toBe(60)
+
+    // Clearing the field removes the threshold.
+    const cleared = await updateAssessmentSettings(assessment.id, instructor.id, { passing_score: null })
+    expect(cleared.error).toBeNull()
+    expect(cleared.assessment!.passing_score).toBeNull()
+    expect((await getAssessmentWithQuestions(assessment.id)).assessment!.passing_score).toBeNull()
+  })
+
+  test('rejects out-of-range and non-integer passing scores without changing stored value', async () => {
+    const { instructor, assessment } = await setupWithSubmission()
+
+    await updateAssessmentSettings(assessment.id, instructor.id, { passing_score: 75 })
+
+    for (const bad of [101, -1, 12.5]) {
+      const result = await updateAssessmentSettings(assessment.id, instructor.id, { passing_score: bad })
+      expect(result.error).toBe('Passing score must be an integer between 0 and 100')
+      expect(result.assessment).toBeNull()
+    }
+
+    // The previously saved value is untouched by rejected updates.
+    expect((await getAssessmentWithQuestions(assessment.id)).assessment!.passing_score).toBe(75)
+
+    // Boundaries are inclusive.
+    expect((await updateAssessmentSettings(assessment.id, instructor.id, { passing_score: 0 })).error).toBeNull()
+    expect((await updateAssessmentSettings(assessment.id, instructor.id, { passing_score: 100 })).error).toBeNull()
+  })
+
+  test('remains editable after submissions exist with no effect on existing scores', async () => {
+    const { instructor, student, assessment } = await setupWithSubmission()
+
+    await updateAssessmentSettings(assessment.id, instructor.id, { scores_released: true })
+    const before = await getStudentSubmissionHistory(assessment.id, student.id)
+    expect(before).toHaveLength(1)
+    expect(before[0].score_total).toBe(3) // MC 2 + TF 1
+
+    const edited = await updateAssessmentSettings(assessment.id, instructor.id, { passing_score: 50 })
+    expect(edited.error).toBeNull()
+    expect(edited.assessment!.passing_score).toBe(50)
+
+    const after = await getStudentSubmissionHistory(assessment.id, student.id)
+    expect(after).toHaveLength(1)
+    expect(after[0].score_total).toBe(3)
   })
 })
