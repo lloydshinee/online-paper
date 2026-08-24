@@ -90,7 +90,7 @@ describe('AssessmentsTab', () => {
   test('renders the empty state when the class has no assessments', () => {
     render(<AssessmentsTab classId="c1" drafts={[]} published={[]} closed={[]} />)
 
-    expect(screen.getByText('No assessments yet')).toBeDefined()
+    expect(screen.getByText('No assessments yet')).not.toBeNull()
     expect(screen.getByRole('link', { name: /Create Assessment/i }).getAttribute('href'))
       .toBe('/dashboard/instructor/classes/c1/assessments/create')
     expect(screen.queryByRole('heading', { name: 'Drafts' })).toBeNull()
@@ -111,16 +111,16 @@ describe('AssessmentsTab', () => {
       />,
     )
 
-    expect(screen.getByRole('heading', { name: 'Drafts' })).toBeDefined()
-    expect(screen.getByRole('heading', { name: 'Published' })).toBeDefined()
-    expect(screen.getByRole('heading', { name: 'Closed' })).toBeDefined()
+    expect(screen.getByRole('heading', { name: 'Drafts' })).not.toBeNull()
+    expect(screen.getByRole('heading', { name: 'Published' })).not.toBeNull()
+    expect(screen.getByRole('heading', { name: 'Closed' })).not.toBeNull()
 
     expect(screen.getByRole('link', { name: /Draft quiz/i }).getAttribute('href'))
       .toBe('/dashboard/instructor/classes/c1/assessments/d-1')
     expect(screen.getByRole('link', { name: /Live exam/i }).getAttribute('href'))
       .toBe('/dashboard/instructor/classes/c1/assessments/p-1')
     // A published assessment that no longer accepts submissions is flagged Closed inline.
-    expect(screen.getByText('Closed intake')).toBeDefined()
+    expect(screen.getByText('Closed intake')).not.toBeNull()
     expect(screen.getByRole('link', { name: /Old final/i }).getAttribute('href'))
       .toBe('/dashboard/instructor/classes/c1/assessments/x-1')
 
@@ -133,11 +133,11 @@ describe('AssessmentsTab', () => {
 
 describe('StudentSummaryTab', () => {
   test('renders a placeholder empty state', () => {
-    render(<StudentSummaryTab />)
+    render(<StudentSummaryTab matrix={null} />)
 
-    expect(screen.getByText('No student summary yet')).toBeDefined()
+    expect(screen.getByText('No student summary yet')).not.toBeNull()
     expect(
       screen.getByText(/Scores will appear here once you publish assessments/),
-    ).toBeDefined()
+    ).not.toBeNull()
   })
 })
