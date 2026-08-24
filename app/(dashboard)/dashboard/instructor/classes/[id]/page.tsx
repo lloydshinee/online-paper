@@ -1,6 +1,7 @@
 import { requireRole } from '@/lib/auth/require-auth'
 import { getInstructorClasses, getRoster } from '@/app/actions/classes'
 import { getAssessmentsForClass } from '@/app/actions/assessments'
+import { getStudentSummary } from '@/app/actions/student-summary'
 import DashboardHeader from '@/components/dashboard-header'
 import { StudentRoster } from '@/components/student-roster'
 import { ArrowLeft, FileEdit, CheckCircle2, Archive, Plus } from 'lucide-react'
@@ -10,6 +11,11 @@ import { notFound } from 'next/navigation'
 import { AssessmentsTab } from './_components/assessments-tab'
 import { StudentSummaryTab } from './_components/student-summary-tab'
 import { ClassPageTabs, parseClassPageTab } from './_components/class-page-tabs'
+
+async function StudentSummaryTabWrapper({ classId }: { classId: string }) {
+  const { matrix } = await getStudentSummary(classId)
+  return <StudentSummaryTab matrix={matrix} />
+}
 
 export default async function ClassPage({
   params,
@@ -103,7 +109,7 @@ export default async function ClassPage({
           <AssessmentsTab classId={id} drafts={drafts} published={published} closed={closed} />
         )}
         {active === 'roster' && <StudentRoster classId={id} initialCount={students.length} />}
-        {active === 'summary' && <StudentSummaryTab />}
+        {active === 'summary' && <StudentSummaryTabWrapper classId={id} />}
       </main>
     </div>
   )
