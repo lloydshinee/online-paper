@@ -17,7 +17,18 @@ export interface DashboardAssessment {
   accepting_submissions: boolean
   retakes_allowed: boolean
   created_at: string
-  submission: { status: string; score_total: number | null } | null
+  submission: StudentSubmissionSummary | null
+}
+
+/** Per-assessment submission state for student views. `has_in_progress` is
+ * deliberately deadline-blind: a past-deadline attempt still counts as
+ * running until the server expires it, so retake entry points stay hidden
+ * while any attempt is alive. */
+export interface StudentSubmissionSummary {
+  status: string
+  score_total: number | null
+  has_in_progress: boolean
+  has_finished_attempt: boolean
 }
 
 const ASSESSMENT_SELECT = 'id, class_id, title, mode, state, duration_minutes, scores_released, answer_reveal_enabled, accepting_submissions, retakes_allowed, created_at'
@@ -28,7 +39,7 @@ type SubmissionForMap = { assessment_id: string; status: string; score_total: nu
 function buildSubmissionMap(
   assessments: AssessmentForMap[],
   submissions: SubmissionForMap[] | null,
-): Map<string, { status: string; score_total: number | null }> {
+): Map<string, StudentSubmissionSummary> {
   const assessmentMap = new Map(assessments.map((a) => [a.id, a]))
   const subsByAssessment = new Map<string, SubmissionForMap[]>()
 
@@ -39,11 +50,13 @@ function buildSubmissionMap(
     subsByAssessment.get(s.assessment_id)!.push(s)
   }
 
-  const result = new Map<string, { status: string; score_total: number | null }>()
+  const result = new Map<string, StudentSubmissionSummary>()
 
   for (const [assessmentId, subs] of subsByAssessment) {
     const latest = subs[0]
     const assessment = assessmentMap.get(assessmentId)
+    const hasInProgress = subs.some((s) => s.status === 'in_progress')
+    const finished = subs.find((s) => s.status === 'submitted' || s.status === 'expired')
 
     if (latest.status === 'in_progress' && assessment) {
       const isOverdue =
@@ -52,12 +65,11 @@ function buildSubmissionMap(
         computeDeadline(latest.started_at, assessment.duration_minutes, latest.extra_seconds ?? 0) < Date.now()
 
       if (isOverdue) {
-        const completed = subs.find((s) => s.status === 'submitted' || s.status === 'expired')
-        if (completed) {
-          const scoreTotal = assessment.scores_released === true ? completed.score_total : null
-          result.set(assessmentId, { status: completed.status, score_total: scoreTotal })
+        if (finished) {
+          const scoreTotal = assessment.scores_released === true ? finished.score_total : null
+          result.set(assessmentId, { status: finished.status, score_total: scoreTotal, has_in_progress: hasInProgress, has_finished_attempt: true })
         } else {
-          result.set(assessmentId, { status: 'expired', score_total: null })
+          result.set(assessmentId, { status: 'expired', score_total: null, has_in_progress: hasInProgress, has_finished_attempt: false })
         }
         continue
       }
@@ -65,7 +77,7 @@ function buildSubmissionMap(
 
     // Scores are stripped server-side while scores_released is off.
     const scoreTotal = assessment?.scores_released === true ? latest.score_total : null
-    result.set(assessmentId, { status: latest.status, score_total: scoreTotal })
+    result.set(assessmentId, { status: latest.status, score_total: scoreTotal, has_in_progress: hasInProgress, has_finished_attempt: !!finished })
   }
 
   return result
@@ -532,7 +544,7 @@ export async function getStudentAssessments(
   studentId: string,
   classId: string,
 ): Promise<{
-  assessments: (AssessmentData & { submission: { status: string; score_total: number | null } | null })[]
+  assessments: (AssessmentData & { submission: StudentSubmissionSummary | null })[]
   error: string | null
 }> {
   const supabase = createServiceClient()

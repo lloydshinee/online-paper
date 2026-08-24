@@ -179,7 +179,14 @@ export default async function StudentClassPage({
                     const href = `/dashboard/student/classes/${id}/assessments/${a.id}`
                     const hasScore = a.submission?.score_total != null
                     const scoresReleased = a.scores_released
-                    const canRetake = a.retakes_allowed
+                    // Timed retakes are offered only for finished work with
+                    // nothing running: at least one finished attempt AND no
+                    // In Progress attempt. The live join link keeps its
+                    // previous behavior.
+                    const canRetake =
+                      a.retakes_allowed &&
+                      (a.mode === 'live' ||
+                        (!a.submission!.has_in_progress && a.submission!.has_finished_attempt))
 
                     return (
                       <div

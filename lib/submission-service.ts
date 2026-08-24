@@ -99,7 +99,11 @@ export async function startSubmission(
     .eq('status', 'in_progress')
     .maybeSingle()
 
-  if (existing && !opts?.retake) {
+  // A live (non-overdue) In Progress attempt is always a resume — retake
+  // request or not, it is never expired to spawn a blank successor. Only a
+  // past-deadline attempt may be expired here, and only as a precursor to
+  // the deliberate new attempt below.
+  if (existing) {
     const overdue = await isSubmissionOverdue(existing)
     if (overdue) {
       await expireSubmission(existing.id)
@@ -152,14 +156,8 @@ export async function startSubmission(
     return { submission: null, error: 'Assessment is not currently accepting submissions' }
   }
 
-  if (opts?.retake) {
-    if (!assessment.retakes_allowed) {
-      return { submission: null, error: 'Retakes are not allowed for this assessment' }
-    }
-    // Expire any existing in_progress submission from a previous retake
-    if (existing) {
-      await expireSubmission(existing.id)
-    }
+  if (opts?.retake && !assessment.retakes_allowed) {
+    return { submission: null, error: 'Retakes are not allowed for this assessment' }
   }
 
   const { data, error } = await supabase

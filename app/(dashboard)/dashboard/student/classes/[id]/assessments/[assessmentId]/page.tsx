@@ -102,7 +102,8 @@ export default function TakeAssessmentPage({
   const [results, setResults] = useState<SubmissionResult | null>(null)
   const [resultsUnavailable, setResultsUnavailable] = useState(false)
   const [submissionHistory, setSubmissionHistory] = useState<SubmissionHistoryItem[]>([])
-  const [viewMode, setViewMode] = useState<'loading' | 'take' | 'results'>('loading')
+  const [viewMode, setViewMode] = useState<'loading' | 'take' | 'results' | 'retake-confirm'>('loading')
+  const [retakeGate, setRetakeGate] = useState<{ attemptNumber: number; previousScore: number | null } | null>(null)
   const [violations, setViolations] = useState(0)
   const violationsRef = useRef(0)
   const submissionIdRef = useRef<string | null>(null)
@@ -286,6 +287,51 @@ export default function TakeAssessmentPage({
   // ------------------------------------------------------------------
   // Init / resume
   // ------------------------------------------------------------------
+  // Load the assessment and start (or resume into) an attempt. Shared by
+  // the auto-start paths and the retake confirm gate's explicit click.
+  const beginAssessment = useCallback(async (retake: boolean) => {
+    const data = await getAssessmentData(assessmentId)
+    if (!data || data.error || !data.assessment) {
+      setError(data?.error ?? 'Assessment not found')
+      setLoading(false)
+      return
+    }
+
+    if (data.assessment.mode === 'live') {
+      router.replace(`${window.location.pathname}/live`)
+      return
+    }
+
+    setAssessment(data.assessment)
+    setQuestions(data.questions)
+
+    if (data.timeLimit) {
+      // Optimistic pre-start display only; the authoritative deadline is
+      // seeded from the server's started_at below, before the timer can
+      // ever read it (viewMode is still 'loading').
+      setTimeLeft(data.timeLimit * 60)
+    }
+
+    const startResult = await startAssessmentAction(assessmentId, retake)
+    if (startResult.submissionId) {
+      setSubmissionId(startResult.submissionId)
+      submissionIdRef.current = startResult.submissionId
+
+      if (data.timeLimit && startResult.startedAt) {
+        const deadline = computeDeadline(startResult.startedAt, data.timeLimit, startResult.extraSeconds)
+        deadlineRef.current = deadline
+        extraSecondsRef.current = startResult.extraSeconds
+        setTimeLeft(remainingSeconds(deadline, Date.now()))
+      }
+
+      setViewMode('take')
+      setLoading(false)
+    } else {
+      setError(startResult.error || 'This assessment is not currently available.')
+      setLoading(false)
+    }
+  }, [assessmentId, router])
+
   useEffect(() => {
     if (initRef.current) return
     initRef.current = true
@@ -363,47 +409,25 @@ export default function TakeAssessmentPage({
           }
         }
 
-        // No prior submission — load assessment for taking.
-        const data = await getAssessmentData(assessmentId)
-        if (!data || data.error || !data.assessment) {
-          setError(data?.error ?? 'Assessment not found')
-          setLoading(false)
-          return
-        }
-
-        if (data.assessment.mode === 'live') {
-          router.replace(`${window.location.pathname}/live`)
-          return
-        }
-
-        setAssessment(data.assessment)
-        setQuestions(data.questions)
-
-        if (data.timeLimit) {
-          // Optimistic pre-start display only; the authoritative deadline is
-          // seeded from the server's started_at below, before the timer can
-          // ever read it (viewMode is still 'loading').
-          setTimeLeft(data.timeLimit * 60)
-        }
-
-        const startResult = await startAssessmentAction(assessmentId, isRetake)
-        if (startResult.submissionId) {
-          setSubmissionId(startResult.submissionId)
-          submissionIdRef.current = startResult.submissionId
-
-          if (data.timeLimit && startResult.startedAt) {
-            const deadline = computeDeadline(startResult.startedAt, data.timeLimit, startResult.extraSeconds)
-            deadlineRef.current = deadline
-            extraSecondsRef.current = startResult.extraSeconds
-            setTimeLeft(remainingSeconds(deadline, Date.now()))
+        // Retake visits stop at a confirmation gate when finished attempts
+        // exist: the new attempt starts only on an explicit click. A crafted
+        // retake URL with no prior submissions falls through to a normal
+        // first start.
+        if (isRetake) {
+          const history = await getSubmissionHistoryAction(assessmentId)
+          if (history.length > 0) {
+            const latestFinished = history[history.length - 1]
+            setRetakeGate({
+              attemptNumber: history.length + 1,
+              previousScore: latestFinished.score_total,
+            })
+            setViewMode('retake-confirm')
+            setLoading(false)
+            return
           }
-
-          setViewMode('take')
-          setLoading(false)
-        } else {
-          setError(startResult.error || 'This assessment is not currently available.')
-          setLoading(false)
         }
+
+        await beginAssessment(isRetake)
       } catch {
         setError('Failed to load assessment')
         setLoading(false)
@@ -550,6 +574,12 @@ export default function TakeAssessmentPage({
       setSubmitting(false)
     }
   }
+
+  // Explicit consent for a retake: nothing starts until this click.
+  const confirmStartRetake = useCallback(async () => {
+    setViewMode('loading')
+    await beginAssessment(true)
+  }, [beginAssessment])
 
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60)
@@ -889,6 +919,41 @@ export default function TakeAssessmentPage({
             Back to class
           </Link>
         </div>
+      </div>
+    )
+  }
+
+  if (viewMode === 'retake-confirm' && retakeGate) {
+    return (
+      <div className="min-h-screen bg-background text-foreground">
+        <main className="mx-auto max-w-md px-6 py-20">
+          <div className="rounded-xl border border-border bg-card p-8 text-center">
+            <div className="mb-4 flex size-12 items-center justify-center rounded-full bg-primary/10 mx-auto">
+              <RotateCcw size={24} className="text-primary" />
+            </div>
+            <h2 className="text-lg font-semibold mb-2">Start a new attempt?</h2>
+            <p className="text-sm text-muted-foreground mb-6" data-testid="retake-gate-message">
+              {retakeGate.previousScore != null
+                ? `Your previous attempt: ${retakeGate.previousScore} pts. `
+                : 'You have a previous attempt on record. '}
+              This will start attempt #{retakeGate.attemptNumber}; your previous results are preserved.
+            </p>
+            <div className="flex items-center justify-center gap-3">
+              <Link
+                href={`/dashboard/student/classes/${classId}`}
+                className="rounded-md border border-border px-4 py-2 text-sm hover:bg-muted transition-colors"
+              >
+                Cancel
+              </Link>
+              <button
+                onClick={confirmStartRetake}
+                className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+              >
+                Start attempt #{retakeGate.attemptNumber}
+              </button>
+            </div>
+          </div>
+        </main>
       </div>
     )
   }

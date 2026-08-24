@@ -426,6 +426,74 @@ describe('retakes', () => {
   })
 })
 
+describe('retake never discards a running attempt', () => {
+  function getAdmin() {
+    return createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      { auth: { autoRefreshToken: false, persistSession: false } },
+    )
+  }
+
+  test('retake with a live In Progress attempt returns it for resume, untouched', async () => {
+    const { instructor, student, assessment } = await setupAssessment()
+    const questions = await getAssessmentQuestions(assessment.id)
+    await updateAssessmentSettings(assessment.id, instructor.id, { retakes_allowed: true })
+
+    const { submission: first } = await startSubmission(student.id, assessment.id)
+    await saveAnswer(first!.id, questions[0].id, student.id, { selectedIndex: 1 })
+
+    const { submission: resumed, error } = await startSubmission(student.id, assessment.id, { retake: true })
+
+    expect(error).toBeNull()
+    expect(resumed).not.toBeNull()
+    expect(resumed!.id).toBe(first!.id)
+    expect(resumed!.status).toBe('in_progress')
+
+    // No new row was inserted and the running attempt kept its answers.
+    const { data: rows } = await getAdmin()
+      .from('submissions')
+      .select('id')
+      .eq('student_id', student.id)
+      .eq('assessment_id', assessment.id)
+    expect(rows).toHaveLength(1)
+
+    const active = await getActiveSubmission(student.id, assessment.id)
+    expect(active!.id).toBe(first!.id)
+    expect(active!.answers.find((a) => a.question_id === questions[0].id)).toBeDefined()
+  })
+
+  test('retake with a past-deadline In Progress attempt expires it and creates exactly one new blank attempt', async () => {
+    const { instructor, student, assessment } = await setupAssessment()
+    await updateAssessmentSettings(assessment.id, instructor.id, { retakes_allowed: true })
+
+    const { submission: first } = await startSubmission(student.id, assessment.id)
+
+    // Backdate past the 30-minute deadline.
+    const admin = getAdmin()
+    await admin
+      .from('submissions')
+      .update({ started_at: new Date(Date.now() - 31 * 60 * 1000).toISOString() })
+      .eq('id', first!.id)
+
+    const { submission: retake, error } = await startSubmission(student.id, assessment.id, { retake: true })
+
+    expect(error).toBeNull()
+    expect(retake).not.toBeNull()
+    expect(retake!.id).not.toBe(first!.id)
+    expect(retake!.status).toBe('in_progress')
+
+    const { data: rows } = await admin
+      .from('submissions')
+      .select('id, status')
+      .eq('student_id', student.id)
+      .eq('assessment_id', assessment.id)
+    expect(rows).toHaveLength(2)
+    expect(rows!.find((r) => r.id === first!.id)!.status).toBe('expired')
+    expect(rows!.find((r) => r.id === retake!.id)!.status).toBe('in_progress')
+  })
+})
+
 describe('score recalculation', () => {
   test('recalculates scores after question edit', async () => {
     const { instructor, student, assessment } = await setupAssessment()

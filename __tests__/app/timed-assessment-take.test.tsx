@@ -17,9 +17,11 @@ const actions = vi.hoisted(() => ({
 
 vi.mock('@/app/actions/timed-assessment', () => actions)
 
+const searchParamsGet = vi.hoisted(() => vi.fn<(key: string) => string | null>(() => null))
+
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
-  useSearchParams: () => ({ get: () => null }),
+  useSearchParams: () => ({ get: searchParamsGet }),
 }))
 
 vi.mock('next/link', () => ({
@@ -107,6 +109,7 @@ async function goToSubmit() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  searchParamsGet.mockReturnValue(null)
   actions.getSubmissionResultsAction
     .mockResolvedValueOnce(noSubmissionResults)
     .mockResolvedValue(hiddenResults)
@@ -371,5 +374,70 @@ describe('timed assessment take page', () => {
         Object.defineProperty(document, 'hidden', hiddenDescriptor)
       }
     }
+  })
+})
+
+describe('retake confirm gate', () => {
+  function historyItem(overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      id: 'sub-9',
+      attempt_number: 1,
+      score_total: 7,
+      status: 'submitted',
+      submitted_at: '2026-08-16T00:00:00.000Z',
+      started_at: '2026-08-16T00:00:00.000Z',
+      ...overrides,
+    }
+  }
+
+  test('retake visit with prior finished attempts shows the gate and starts only on explicit click', async () => {
+    searchParamsGet.mockReturnValue('1')
+    actions.getSubmissionHistoryAction.mockResolvedValue([historyItem()])
+
+    renderPage()
+    await screen.findByText(/Your previous attempt: 7 pts/)
+
+    expect(screen.getByRole('button', { name: 'Start attempt #2' })).toBeDefined()
+    expect(actions.startAssessmentAction).not.toHaveBeenCalled()
+    expect(actions.getAssessmentData).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start attempt #2' }))
+
+    await screen.findByText('What is 2+2?')
+    expect(actions.startAssessmentAction).toHaveBeenCalledWith('assessment-1', true)
+  })
+
+  test('a crafted retake URL with no prior submissions behaves like a normal first start', async () => {
+    searchParamsGet.mockReturnValue('1')
+    actions.getSubmissionHistoryAction.mockResolvedValue([])
+
+    renderPage()
+
+    await screen.findByText('What is 2+2?')
+    expect(screen.queryByText(/previous attempt/i)).toBeNull()
+    expect(actions.startAssessmentAction).toHaveBeenCalledWith('assessment-1', true)
+  })
+
+  test('the gate hides the previous score while scores are unreleased', async () => {
+    searchParamsGet.mockReturnValue('1')
+    actions.getSubmissionHistoryAction.mockResolvedValue([historyItem({ score_total: null })])
+
+    renderPage()
+
+    await screen.findByRole('button', { name: 'Start attempt #2' })
+    expect(screen.getByText(/previous attempt on record/)).toBeDefined()
+    expect(screen.queryByText(/\d+ pts/)).toBeNull()
+  })
+
+  test('first-time starts without the retake flag never show the gate', async () => {
+    actions.getSubmissionResultsAction
+      .mockReset()
+      .mockResolvedValueOnce(noSubmissionResults)
+
+    renderPage()
+
+    await screen.findByText('What is 2+2?')
+    expect(screen.queryByText(/previous attempt/i)).toBeNull()
+    expect(actions.startAssessmentAction).toHaveBeenCalledWith('assessment-1', false)
   })
 })
