@@ -5,6 +5,7 @@ import SubmissionsTab from '@/app/(dashboard)/dashboard/instructor/classes/[id]/
 const gradingActions = vi.hoisted(() => ({
   getAssessmentSubmissions: vi.fn(),
   getSubmissionDetail: vi.fn(),
+  deleteSubmissionAction: vi.fn(),
 }))
 
 const timedAssessmentActions = vi.hoisted(() => ({
@@ -96,6 +97,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockListing()
   gradingActions.getSubmissionDetail.mockResolvedValue(null)
+  gradingActions.deleteSubmissionAction.mockResolvedValue({ error: null })
   timedAssessmentActions.grantTimeAction.mockResolvedValue({ error: null, submission: { id: 'sub-in-progress' } })
 })
 
@@ -182,5 +184,115 @@ describe('submissions tab', () => {
       expect(toast.error).toHaveBeenCalledWith('Grant failed')
     })
     expect(gradingActions.getAssessmentSubmissions).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('submissions tab attempt deletion', () => {
+  function queueListingAfterDelete(remaining = baseSubmissions) {
+    gradingActions.getAssessmentSubmissions
+      .mockResolvedValueOnce({ submissions: baseSubmissions, total: baseSubmissions.length, error: null })
+      .mockResolvedValue({ submissions: remaining, total: remaining.length, error: null })
+  }
+
+  test('deleting an In Progress attempt warns, confirms, deletes, and refreshes the list', async () => {
+    const remaining = baseSubmissions.filter((s) => s.id !== 'sub-in-progress')
+    queueListingAfterDelete(remaining)
+
+    render(<SubmissionsTab assessmentId="assessment-1" assessmentMode="timed" />)
+
+    await openAttemptsDialog()
+
+    fireEvent.click(screen.getAllByRole('button', { name: /^delete$/i })[0])
+
+    await screen.findByText('Delete this attempt?')
+    expect(screen.getByText(/may be answering right now/)).toBeDefined()
+
+    fireEvent.click(screen.getByRole('button', { name: /yes, delete/i }))
+
+    await waitFor(() => {
+      expect(gradingActions.deleteSubmissionAction).toHaveBeenCalledWith('sub-in-progress')
+    })
+    await waitFor(() => {
+      expect(screen.getByText('2 attempts')).toBeDefined()
+    })
+    expect(toast.success).toHaveBeenCalledWith('Attempt deleted')
+  })
+
+  test('deleting a finished attempt shows no in-progress warning and calls the action', async () => {
+    render(<SubmissionsTab assessmentId="assessment-1" assessmentMode="timed" />)
+
+    await openAttemptsDialog()
+
+    fireEvent.click(screen.getAllByRole('button', { name: /^delete$/i })[2])
+
+    await screen.findByText('Delete this attempt?')
+    expect(screen.queryByText(/answering right now/)).toBeNull()
+    expect(screen.getByText(/regardless of the retakes setting/)).toBeDefined()
+
+    fireEvent.click(screen.getByRole('button', { name: /yes, delete/i }))
+
+    await waitFor(() => {
+      expect(gradingActions.deleteSubmissionAction).toHaveBeenCalledWith('sub-older-finished')
+    })
+  })
+
+  test('cancelling the confirmation leaves the attempt untouched', async () => {
+    render(<SubmissionsTab assessmentId="assessment-1" assessmentMode="timed" />)
+
+    await openAttemptsDialog()
+
+    fireEvent.click(screen.getAllByRole('button', { name: /^delete$/i })[1])
+    await screen.findByText('Delete this attempt?')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(await screen.findByText('3 attempts')).toBeDefined()
+    expect(gradingActions.deleteSubmissionAction).not.toHaveBeenCalled()
+  })
+
+  test('delete all confirms once with the warning and removes every attempt, closing the dialog', async () => {
+    queueListingAfterDelete([])
+
+    render(<SubmissionsTab assessmentId="assessment-1" assessmentMode="timed" />)
+
+    await openAttemptsDialog()
+
+    fireEvent.click(screen.getByRole('button', { name: /delete all attempts/i }))
+
+    await screen.findByText('Delete all attempts?')
+    expect(screen.getByText(/may be answering right now/)).toBeDefined()
+    expect(screen.getByText(/all 3 attempts/)).toBeDefined()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, delete all' }))
+
+    await waitFor(() => {
+      expect(gradingActions.deleteSubmissionAction).toHaveBeenCalledTimes(3)
+    })
+    expect(gradingActions.deleteSubmissionAction).toHaveBeenCalledWith('sub-in-progress')
+    expect(gradingActions.deleteSubmissionAction).toHaveBeenCalledWith('sub-latest-finished')
+    expect(gradingActions.deleteSubmissionAction).toHaveBeenCalledWith('sub-older-finished')
+
+    // The student has no attempts left, so the dialog closes entirely.
+    await waitFor(() => {
+      expect(screen.queryByText('3 attempts')).toBeNull()
+    })
+    expect(toast.success).toHaveBeenCalledWith('3 attempts deleted')
+  })
+
+  test('a failed delete surfaces the server error and keeps the dialog usable', async () => {
+    gradingActions.deleteSubmissionAction.mockResolvedValue({ error: 'Not authorized' })
+
+    render(<SubmissionsTab assessmentId="assessment-1" assessmentMode="timed" />)
+
+    await openAttemptsDialog()
+
+    fireEvent.click(screen.getAllByRole('button', { name: /^delete$/i })[0])
+    await screen.findByText('Delete this attempt?')
+
+    fireEvent.click(screen.getByRole('button', { name: /yes, delete/i }))
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Not authorized')
+    })
   })
 })
