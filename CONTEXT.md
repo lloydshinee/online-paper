@@ -39,8 +39,12 @@ An instructor-granted addition of minutes to a specific student's attempt on a t
 _Avoid_: Extra time, grace period, deadline adjustment
 
 **Retake**:
-A subsequent submission for an already-completed assessment. The instructor controls whether retakes are allowed per assessment. Each retake creates a brand-new submission row while preserving all previous submissions and their answers. An instructor may also force a retake by deleting a specific student's submission.
+A subsequent submission for an already-completed assessment. The instructor controls whether retakes are allowed per assessment. Each retake creates a brand-new submission row while preserving all previous submissions and their answers. The retake entry point appears only when the student's latest attempt is finished, and the student confirms before it starts. The server treats a retake request arriving while the student has an In Progress attempt as a resume: it never silently discards a running attempt.
 _Avoid_: Reattempt, redo, second try
+
+**Attempt Deletion**:
+An instructor action that permanently removes a submission together with its answers. Available per attempt, or in bulk to clear every attempt a student has on an assessment. Any status can be deleted, including In Progress. Deleting a student's only attempt returns them to never-taken: they may take the assessment again regardless of the retakes setting — deletion is the force-retake mechanism.
+_Avoid_: Reset, clearing answers, purge
 
 **Feedback**:
 Written comments left by an instructor on an essay or coding answer during manual grading.
@@ -49,6 +53,10 @@ _Avoid_: Comment, note, annotation
 **Score**:
 The total points a student earned on a submission. Calculated from per-question points. Recalculated if the instructor edits a question after submissions exist. Remains hidden from the student until the instructor explicitly releases scores. Students can copy scores as tab-separated values for pasting into spreadsheets.
 _Avoid_: Grade, mark, result
+
+**Passing Score**:
+An optional per-assessment threshold expressed as a percentage of total points (0–100). Blank means the assessment has no pass/fail threshold. Because it is percentage-based, editing questions or point values never changes its meaning. Whether a student failed is derived at read time, never stored.
+_Avoid_: Cut-off, pass mark, passing grade
 
 ## Submission statuses
 
@@ -62,6 +70,24 @@ _Avoid_: Completed, finished, turned in
 
 **Expired**:
 The countdown timer reached zero and the system auto-submitted the student's answers. Auto-grading runs immediately. Treated identically to Submitted for results display. Like Submitted, the instructor may re-open the student's latest finished attempt via a Time Extension.
+
+## Student Summary
+
+**Student Summary**:
+The instructor's class-level matrix on the class page: enrolled students as rows, published and closed assessments as columns. Each cell shows either the authoritative score or a state: Failed, Missing, Not Taken, or In Progress. Filterable down to problem states only. Scores appear here regardless of whether they are released to students. Draft assessments never appear.
+_Avoid_: Gradebook, analytics dashboard, report card
+
+**Not Taken**:
+An enrolled student has no submissions for an assessment that is still open for work (published and accepting submissions). Still actionable — the student can start it.
+_Avoid_: Absent, pending, upcoming
+
+**Missing**:
+A student never obtained a submitted or expired attempt on an assessment whose window has ended — the assessment was closed, its availability end passed, or its live session ended. Permanent unless the instructor intervenes via retake or time extension.
+_Avoid_: Absent, incomplete, failed
+
+**Failed**:
+The authoritative score, as a percentage of total points, falls below the assessment's Passing Score. Only defined when a passing score is set; otherwise no student can be Failed on that assessment.
+_Avoid_: Flunked, below cut-off
 
 ## Live session
 
@@ -130,6 +156,7 @@ Instructors create questions by pasting a block of formatted plain text. The tex
 - When released, students see: a score summary, per-question breakdown (their answer vs correct answer, points earned), written feedback on manual answers, and total score.
 - If the instructor edits a question after submissions exist, all affected submission scores are recalculated.
 - Students may retake an assessment only if the instructor permits it. Each retake creates a new submission; previous submissions are preserved. Students can view their full submission history including scores from past attempts.
+- An assessment may define an optional Passing Score as a percentage. The instructor's Student Summary marks a student Failed when their authoritative score falls below it.
 - Students can copy scores in tab-separated format for pasting into grading spreadsheets.
 
 ## Registration and authentication
